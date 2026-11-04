@@ -39,11 +39,16 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 			'bool');
 		addOption(option);
 
-		// var option:Option = new Option('GPU Caching', //Name
-		// 	"If checked, allows the GPU to be used for caching textures, decreasing RAM usage.\nDon't turn this on if any of your mods modify pixels of sprites.", //Description
-		// 	'cacheOnGPU',
-		// 	'bool');
-		// addOption(option);
+		#if (cpp && !mobile)
+		// Preloads *small* textures to the GPU over successive updates.
+		// OpenFL still uses its GPU normally when this is disabled.
+		var gpuOption:Option = new Option('GPU Caching',
+			'Prepares small textures gradually on the GPU.\nMay reduce first-use stutter, but can increase VRAM.\nDoes not discard CPU pixels. Restart recommended.',
+			'cacheOnGPU',
+			'bool');
+		gpuOption.onChange = onChangeGPUCaching;
+		addOption(gpuOption);
+		#end
 
 		#if !html5 //Apparently other framerates isn't correctly supported on Browser? Probably it has some V-Sync shit enabled by default, idk
 
@@ -93,6 +98,13 @@ class GraphicsSettingsSubState extends BaseOptionsMenu
 		super();
 		insert(1, boyfriend);
 	}
+
+	#if (cpp && !mobile)
+	function onChangeGPUCaching():Void
+	{
+		backend.system.OptimizedBitmapData.configure(ClientPrefs.data.cacheOnGPU);
+	}
+	#end
 
 	function onChangeAntiAliasing()
 	{
