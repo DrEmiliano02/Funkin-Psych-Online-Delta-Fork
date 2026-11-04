@@ -5,7 +5,7 @@ import openfl.display.BitmapData;
 
 class OptimizedBitmapData
 {
-    public static var enabled:Bool = true;
+    public static var enabled:Bool = false;
 
     public static function prepare(bitmap:BitmapData, ?allowGPU:Bool = true):Void
     {
