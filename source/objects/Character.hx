@@ -104,6 +104,12 @@ class Character extends FlxSprite {
 	public var isSkin:Bool = false;
 	public var loadFailed:Bool = false;
 
+	// Variant JSONs for a skin: normal side and -player side.
+	private var leftJson:CharacterFile = null;
+	private var rightJson:CharacterFile = null;
+	private var Flipped:Bool = false;
+	private var startsOnRight:Bool = false;
+
 	public var animSounds:Map<String, openfl.media.Sound> = new Map<String, openfl.media.Sound>();
 	public var sound:FlxSound;
 
@@ -213,6 +219,21 @@ class Character extends FlxSprite {
 
 			default:
 				config = getCharacterFile(curCharacter, this);
+
+				// Resolve the other side once, without creating a fallback BF JSON
+				// or marking this skin as failed if that optional file is absent.
+				if (this.isSkin) {
+					startsOnRight = curCharacter.endsWith('-player');
+					if (startsOnRight) {
+						rightJson = config;
+						var baseName = curCharacter.substr(0, curCharacter.length - '-player'.length);
+						leftJson = getCharacterFile(baseName, null, true);
+					} else {
+						leftJson = config;
+						rightJson = getCharacterFile(curCharacter + '-player', null, true);
+					}
+				}
+
 				isAnimateAtlas = false;
 
 				var split:Array<String> = config.image.split(',');
@@ -418,6 +439,132 @@ class Character extends FlxSprite {
 		if (originGroup != null)
 			sprite3D.z -= originGroup.members.indexOf(this) * 0.0001;
 		PlayState.instance.stage3D.setPositionFromArray(sprite3D, stageObjects.get(charType).position);
+	}
+
+	/**
+	 * Reverse a skin using the alternate JSON (name.json <-> name-player.json).
+	 * Only switches data that can be reused with the already-loaded atlas.
+	 * Returns false if the opposite JSON is missing/incompatible.
+	 * No BitmapData disposal or extra texture preloading occurs here.
+	 */
+	public function flipOffsets():Bool
+	{
+		if (!isSkin || leftJson == null || rightJson == null)
+			return false;
+
+		// Both JSONs must describe the same loaded atlas. Swapping a different
+		// atlas on the fly needs a separate image/FlxAnimate reload mechanism.
+		if (skinImageKey(leftJson) != skinImageKey(rightJson)) {
+			FlxG.log.warn('characterFlip: different atlas images for "' + curCharacter + '". No flip applied.');
+			return false;
+		}
+
+		// The initial side is determined by the JSON suffix rather than isPlayer,
+		// because isPlayer can change in Psych Online/opponent mode.
+		var useRight:Bool = Flipped ? startsOnRight : !startsOnRight;
+		var json:CharacterFile = useRight ? rightJson : leftJson;
+		if (json == null) return false;
+
+		var previousAnim:String = animation.curAnim != null ? animation.curAnim.name : null;
+		var previousFrame:Int = animation.curAnim != null ? animation.curAnim.curFrame : 0;
+
+		// Remove stale JSON offsets, leaving other Lua/HScript offsets untouched.
+		if (animationsArray != null) {
+			for (oldAnim in animationsArray) {
+				if (oldAnim != null && oldAnim.anim != null)
+					animOffsets.remove(oldAnim.anim);
+			}
+		}
+
+		// Preserve live stage/modchart movements; apply only the JSON position delta.
+		if (json.position != null && json.position.length >= 2) {
+			if (positionArray != null && positionArray.length >= 2) {
+				x += json.position[0] - positionArray[0];
+				y += json.position[1] - positionArray[1];
+			}
+			positionArray = json.position.copy();
+			ogPositionArray = json.position.copy();
+		}
+		if (json.camera_position != null)
+			cameraPosition = json.camera_position.copy();
+
+		animationsArray = json.animations;
+		animSounds = new Map<String, openfl.media.Sound>();
+
+		if (animationsArray != null && animationsArray.length > 0) {
+			for (anim in animationsArray) {
+				if (anim == null || anim.anim == null) continue;
+				var animAnim:String = '' + anim.anim;
+				var animName:String = '' + anim.name;
+				var animFps:Int = anim.fps;
+				var animLoop:Bool = !!anim.loop;
+				var animIndices:Array<Int> = anim.indices;
+				var animFlip:Bool = !!anim.flip_x;
+
+				if (!isAnimateAtlas) {
+					if (animIndices != null && animIndices.length > 0)
+						animation.addByIndices(animAnim, animName, animIndices, '', animFps, animLoop, animFlip);
+					else
+						animation.addByPrefix(animAnim, animName, animFps, animLoop, animFlip);
+				}
+				#if flxanimate
+				else if (atlas != null) {
+					try {
+						if (animIndices != null && animIndices.length > 0)
+							atlas.anim.addBySymbolIndices(animAnim, animName, animIndices, animFps, animLoop);
+						else if (atlas.anim.symbolDictionary.exists(animName))
+							atlas.anim.addBySymbol(animAnim, animName, animFps, animLoop);
+						else
+							atlas.anim.addByFrameLabel(animAnim, animName, animFps, animLoop);
+					} catch (e:Dynamic) {
+						FlxG.log.warn('characterFlip: failed to register "' + animAnim + '" for ' + curCharacter);
+					}
+				}
+				#end
+
+				if (anim.offsets != null && anim.offsets.length >= 2)
+					addOffset(animAnim, anim.offsets[0], anim.offsets[1]);
+				else
+					addOffset(animAnim, 0, 0);
+
+				if (anim.sound != null && !ClientPrefs.data.disableAnimAudio) {
+					var newSound = Paths.sound(anim.sound);
+					if (newSound != null) animSounds.set(animAnim, newSound);
+				}
+			}
+		}
+
+		Flipped = !Flipped;
+		flipX = !flipX;
+		recalculateDanceIdle();
+
+		// Refresh the current animation without resetting the whole character.
+		if (!isAnimateAtlas && previousAnim != null && animation.exists(previousAnim) && animOffsets.exists(previousAnim)) {
+			var nextAnim = animation.getByName(previousAnim);
+			var frame:Int = previousFrame;
+			if (nextAnim != null && nextAnim.frames != null && nextAnim.frames.length > 0)
+				frame = Std.int(Math.min(previousFrame, nextAnim.frames.length - 1));
+			animation.play(previousAnim, true, false, frame);
+			var animOffset = animOffsets.get(previousAnim);
+			offset.set(animOffset[0], animOffset[1]);
+		} else {
+			// flxanimate and missing old animations: let the standard helper
+			// choose the idle animation, keeping its own playback handling.
+			dance();
+		}
+		return true;
+	}
+
+	private static function skinImageKey(json:CharacterFile):String
+	{
+		if (json == null || json.image == null) return '';
+		var images:Array<String> = [];
+		for (name in json.image.split(',')) {
+			var clean = name.trim();
+			if (clean.length > 0 && !images.contains(clean)) images.push(clean);
+		}
+		images.sort((a, b) -> Reflect.compare(a, b));
+		return images.join(',');
 	}
 
 	public var noAnimationBullshit:Bool = false;

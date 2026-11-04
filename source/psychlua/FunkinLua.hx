@@ -1437,6 +1437,41 @@ class FunkinLua {
 			}
 		});
 
+		/**
+		 * characterFlip('dad' | 'gf' | 'bf')
+		 * Flips JSON offsets/animations only on skin characters with both variants.
+		 * In multiplayer, applies to every character on the requested team.
+		 */
+		Lua_helper.add_callback(lua, "characterFlip", function(character:String):Bool {
+			var state = PlayState.instance;
+			if (state == null || character == null) return false;
+
+			var changed:Bool = false;
+			switch (character.toLowerCase()) {
+				case 'dad':
+					if (state.dad != null && state.dad.flipOffsets()) changed = true;
+					if (GameClient.isConnected()) {
+						for (other in state.characters) {
+							if (other != null && other != state.dad && !other.isPlayer) {
+								if (other.flipOffsets()) changed = true;
+							}
+						}
+					}
+				case 'gf' | 'girlfriend':
+					if (state.gf != null && state.gf.flipOffsets()) changed = true;
+				default: // bf, boyfriend, player, etc. (same fallback as original snippet)
+					if (state.boyfriend != null && state.boyfriend.flipOffsets()) changed = true;
+					if (GameClient.isConnected()) {
+						for (other in state.characters) {
+							if (other != null && other != state.boyfriend && other.isPlayer) {
+								if (other.flipOffsets()) changed = true;
+							}
+						}
+					}
+			}
+			return changed;
+		});
+
 		Lua_helper.add_callback(lua, "makeLuaSprite", function(tag:String, ?image:String = null, ?x:Float = 0, ?y:Float = 0) {
 			tag = tag.replace('.', '');
 			LuaUtils.destroyObject(tag);
