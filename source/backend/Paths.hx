@@ -77,9 +77,6 @@ class Paths
 				}
 			}
 		}
-
-		// La compilacion de memoria se evita en mitad o al final de una precarga.
-		// Mantener true para conservar el comportamiento anterior en otras llamadas.
 		if (collectGarbage) System.gc();
 	}
 
@@ -272,6 +269,38 @@ class Paths
 	static var lastImageErrorFile:String = null;
 
 	public static var currentTrackedAssets:Map<String, FlxGraphic> = [];
+
+	/** Reuse a live graphic from either cache without decoding PNG again. */
+	static function reuseGraphic(file:String, allowGPU:Bool):FlxGraphic
+	{
+		if (file == null) return null;
+
+		var graphic:FlxGraphic = currentTrackedAssets.get(file);
+		if (graphic != null && graphic.bitmap == null)
+		{
+			currentTrackedAssets.remove(file);
+			graphic = null;
+		}
+		if (graphic == null)
+		{
+			graphic = FlxG.bitmap.get(file);
+			if (graphic != null && graphic.bitmap != null)
+			{
+				currentTrackedAssets.set(file, graphic);
+				graphic.persist = true;
+				graphic.destroyOnNoUse = false;
+			}
+			else graphic = null;
+		}
+		if (graphic != null)
+		{
+			trackLocalAsset(file);
+			OptimizedBitmapData.cacheHits++;
+			OptimizedBitmapData.prepare(graphic, allowGPU);
+		}
+		return graphic;
+	}
+
 	static public function image(key:String, ?library:String = null, ?allowGPU:Bool = true):FlxGraphic
 	{
 		var bitmap:BitmapData = null;
@@ -279,23 +308,17 @@ class Paths
 
 		#if MODS_ALLOWED
 		file = modsImages(key);
-		if (currentTrackedAssets.exists(file))
-		{
-			trackLocalAsset(file);
-			return currentTrackedAssets.get(file);
-		}
-		else if (FileSystem.exists(file))
+		var cachedMod:FlxGraphic = reuseGraphic(file, allowGPU);
+		if (cachedMod != null) return cachedMod;
+		if (FileSystem.exists(file))
 			bitmap = BitmapData.fromFile(file);
 		else
 		#end
 		{
 			file = getPath('images/$key.png', IMAGE, library);
-			if (currentTrackedAssets.exists(file))
-			{
-				trackLocalAsset(file);
-				return currentTrackedAssets.get(file);
-			}
-			else if (OpenFlAssets.exists(file, IMAGE))
+			var cachedAsset:FlxGraphic = reuseGraphic(file, allowGPU);
+			if (cachedAsset != null) return cachedAsset;
+			if (OpenFlAssets.exists(file, IMAGE))
 				bitmap = OpenFlAssets.getBitmapData(file);
 		}
 
@@ -311,10 +334,15 @@ class Paths
 		return null;
 	}
 
-	/**
-		use if you know how threads work
-		note: flxgraphic is not possible to obtain asynchronically, use bitmapToGraphic() in the main thread after fetching the bitmap
-	**/
+	static public function imageCacheKey(key:String, ?library:String = null, ?modDir:String):String
+	{
+		#if MODS_ALLOWED
+		var modFile:String = modsImages(key, modDir);
+		if (FileSystem.exists(modFile)) return modFile;
+		#end
+		return getPath('images/$key.png', IMAGE, library);
+	}
+
 	static public function asyncBitmap(key:String, ?library:String = null, ?modDir:String):Null<Future<BitmapData>> {
 		var file:String = null;
 
@@ -365,7 +393,7 @@ class Paths
 		currentTrackedAssets.set(file, newGraphic);
 
 		// No BitmapData replacement: keep existing FlxGraphic/FlxAtlasFrames refs valid.
-		OptimizedBitmapData.prepare(newGraphic.bitmap, allowGPU);
+		OptimizedBitmapData.prepare(newGraphic, allowGPU);
 		return newGraphic;
 	}
 

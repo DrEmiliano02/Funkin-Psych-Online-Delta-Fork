@@ -35,7 +35,8 @@ class SaveVariables {
 	public var holdAlpha:Float = 0.6;
 	public var lowQuality:Bool = false;
 	public var shaders:Bool = #if mobile false #else true #end;
-	// public var cacheOnGPU:Bool = #if !switch false #else true #end;
+	// Off by default until the black-icon issue is ruled out.
+	public var cacheOnGPU:Bool = false;
 	public var framerate:Int = #if mobile 60 #else 120 #end;
 	public var camZooms:Bool = true;
 	public var hideHud:Bool = false;
@@ -403,6 +404,9 @@ class ClientPrefs {
 		#end
 
 		FlxSprite.defaultAntialiasing = ClientPrefs.data.antialiasing;
+
+		// Apply the saved GPU option before any new graphics are queued.
+		backend.system.OptimizedBitmapData.configure(data.cacheOnGPU);
 
 		if (ClientPrefs.data.unlockFramerate) {
 			FlxG.updateFramerate = 1000;

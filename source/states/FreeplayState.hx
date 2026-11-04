@@ -777,6 +777,7 @@ class FreeplayState extends MusicBeatState
 	}
 
 	override function destroy() {
+		clearSongIconCache();
 		super.destroy();
 
 		FlxG.cameras.remove(itemsCamera);
@@ -866,6 +867,7 @@ class FreeplayState extends MusicBeatState
 	var futureIndex:Int = -1;
 	var futureQueue:Array<Int> = [];
 	var futureIconPath:String = null;
+	var futureIconCharacter:String = null;
 
 	override function update(elapsed:Float)
 	{
@@ -1355,37 +1357,78 @@ class FreeplayState extends MusicBeatState
 
 		updateTexts(elapsed);
 
-		if (futureIcon != null) {
-			if (futureIcon.isComplete || futureIcon.isError) {
-				try {
-					if (!futureIcon.isError && futureIcon.value != null) {
-						var iconBitmap = futureIcon.value;
-						var icon = new HealthIcon(null, false);
-						icon.loadIcon(Paths.bitmapToGraphic(futureIconPath, iconBitmap));
-						icon.scrollFactor.set(1, 1);
-						songsIcons.set(futureIndex, icon);
-						changeSelection(0, false);
+		// Finish a decoded icon on the main thread. Always clear the Future,
+		// including on error, so an exception cannot repeat every frame.
+		if (futureIcon != null)
+		{
+			if (futureIcon.isComplete || futureIcon.isError)
+			{
+				var completed = futureIcon;
+				var completedIndex:Int = futureIndex;
+				var completedPath:String = futureIconPath;
+				var completedCharacter:String = futureIconCharacter;
+				futureIcon = null;
+				futureIndex = -1;
+				futureIconPath = null;
+				futureIconCharacter = null;
+
+				if (completedIndex >= 0 && completedIndex < songs.length && !songsIcons.exists(completedIndex))
+				{
+					try
+					{
+						var loadedIcon:HealthIcon = null;
+						if (!completed.isError && completed.value != null)
+						{
+							// Reuse the existing graphic for this real asset path.
+							var graphic = Paths.currentTrackedAssets.get(completedPath);
+							if (graphic == null || graphic.bitmap == null)
+								graphic = Paths.bitmapToGraphic(completedPath, completed.value, false);
+							if (graphic != null)
+							{
+								loadedIcon = new HealthIcon(null, false, false);
+								loadedIcon.loadIcon(graphic, completedCharacter);
+								if (loadedIcon.frames == null || loadedIcon.frames.frames.length == 0)
+								{
+									loadedIcon.destroy();
+									loadedIcon = null;
+								}
+							}
+							}
+						if (loadedIcon == null)
+							loadedIcon = new HealthIcon('face', false, false);
+						if (loadedIcon.graphic != null)
+						{
+							loadedIcon.scrollFactor.set(1, 1);
+							songsIcons.set(completedIndex, loadedIcon);
+							changeSelection(0, false);
+						}
+						else loadedIcon.destroy();
 					}
-					futureIcon = null;
-				}
-				catch (exc) {
-					Log.error(exc);
+					catch (exc:Dynamic)
+					{
+						Log.error(exc);
+					}
 				}
 			}
 		}
-		else if (futureQueue.length > 0) {
+		else if (futureQueue.length > 0)
+		{
 			futureIndex = futureQueue.shift();
-
-			if (!ClientPrefs.data.disableFreeplayIcons) {
-				if (songs[futureIndex] != null) {
-					var iconPath = 'icons/icon-face';
-					online.util.ShitUtil.tempSwitchMod(songs[futureIndex].folder, () -> {
-						iconPath = HealthIcon.findIconPath(songs[futureIndex].songCharacter);
-						futureIcon = Paths.asyncBitmap(iconPath, null, songs[futureIndex].folder);
-					});
-					futureIconPath = iconPath;
-				}
+			if (!ClientPrefs.data.disableFreeplayIcons && songs[futureIndex] != null)
+			{
+				var iconCharacter:String = songs[futureIndex].songCharacter;
+				var iconMod:String = songs[futureIndex].folder;
+				var iconPath:String = 'icons/icon-face';
+				online.util.ShitUtil.tempSwitchMod(iconMod, () ->
+				{
+					iconPath = HealthIcon.findIconPath(iconCharacter);
+					futureIconPath = Paths.imageCacheKey(iconPath, null, iconMod);
+					futureIcon = Paths.asyncBitmap(iconPath, null, iconMod);
+				});
+				futureIconCharacter = iconCharacter;
 			}
+			if (futureIcon == null)
+				futureIndex = -1;
 		}
 
 		if (FlxG.keys.pressed.SHIFT && !selected) {
@@ -1979,7 +2022,7 @@ class FreeplayState extends MusicBeatState
 				songIcon.snapToTracker();
 				renderIcons.add(songIcon);
 			}
-			else if (!songsIcons.exists(obj.ID) && futureIndex != obj.ID) {
+			else if (!ClientPrefs.data.disableFreeplayIcons && !songsIcons.exists(obj.ID) && futureIndex != obj.ID) {
 				futureQueue.push(obj.ID);
 			}
 
@@ -2313,14 +2356,33 @@ class FreeplayState extends MusicBeatState
 		return searchString = v;
 	}
 
+	function clearSongIconCache():Void
+	{
+		if (renderIcons != null) renderIcons.clear();
+		if (renderHearts != null) renderHearts.killMembers();
+		for (icon in songsIcons)
+		{
+			if (icon != null)
+			{
+				icon.sprTracker = null;
+				icon.destroy();
+			}
+		}
+		songsIcons.clear();
+		futureIcon = null;
+		futureIndex = -1;
+		futureQueue = [];
+		futureIconPath = null;
+		futureIconCharacter = null;
+	}
+
 	function search(?init:Bool = false) {
+		clearSongIconCache();
 		// grpIcons.clear();
 		// grpSongs.clear();
 		// grpHearts.killMembers();
 		// _lastVisibles = [];
 		songs = [];
-		songsIcons.clear();
-
 		updateOverCharts(searchGroup == MIX ? searchGroupVList[searchGroupValue] : (ClientPrefs.data.currentSkin != null ? ClientPrefs.data.currentSkin[0] : null));
 
 		if (!init)
