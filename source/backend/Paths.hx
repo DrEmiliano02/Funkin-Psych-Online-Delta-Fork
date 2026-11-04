@@ -4,6 +4,7 @@ package backend;
 import openfl.utils.Future;
 import flixel.FlxG;
 import backend.system.OptimizedBitmapData;
+import backend.system.BitmapDiagnostics;
 import flixel.system.FlxAssets.FlxGraphicAsset;
 import flxanimate.data.SpriteMapData.FlxSpriteMap;
 import flxanimate.frames.FlxAnimateFrames;
@@ -65,6 +66,8 @@ class Paths
 				@:privateAccess
 				// FlxGraphic may still be held by a sprite, an atlas or a transition.
 				if (obj != null && obj.useCount <= 0) {
+					// Forget any queued GPU work before destroying the graphic.
+					OptimizedBitmapData.forgetGraphic(obj);
 					// remove the key from all cache maps
 					FlxG.bitmap._cache.remove(key);
 					openfl.Assets.cache.removeBitmapData(key);
@@ -77,6 +80,9 @@ class Paths
 				}
 			}
 		}
+
+		// La compilacion de memoria se evita en mitad o al final de una precarga.
+		// Mantener true para conservar el comportamiento anterior en otras llamadas.
 		if (collectGarbage) System.gc();
 	}
 
@@ -96,6 +102,7 @@ class Paths
 		for (key => obj in FlxG.bitmap._cache)
 		{
 			if (obj != null && obj.useCount <= 0 && !currentTrackedAssets.exists(key) && !dumpExclusions.contains(key)) {
+				OptimizedBitmapData.forgetGraphic(obj);
 				openfl.Assets.cache.removeBitmapData(key);
 				FlxG.bitmap._cache.remove(key);
 				// pointer not found?
@@ -296,6 +303,7 @@ class Paths
 		{
 			trackLocalAsset(file);
 			OptimizedBitmapData.cacheHits++;
+			BitmapDiagnostics.recordCacheHit();
 			OptimizedBitmapData.prepare(graphic, allowGPU);
 		}
 		return graphic;
@@ -303,6 +311,7 @@ class Paths
 
 	static public function image(key:String, ?library:String = null, ?allowGPU:Bool = true):FlxGraphic
 	{
+		var started:Float = haxe.Timer.stamp();
 		var bitmap:BitmapData = null;
 		var file:String = null;
 
@@ -323,6 +332,8 @@ class Paths
 		}
 
 		if (bitmap != null) {
+			BitmapDiagnostics.recordImageLoad(file, bitmap.width, bitmap.height,
+				(haxe.Timer.stamp() - started) * 1000.0);
 			return bitmapToGraphic(file, bitmap, allowGPU);
 		}
 
@@ -334,6 +345,10 @@ class Paths
 		return null;
 	}
 
+	/** Canonical asset key: same resolution rules as asyncBitmap().
+	 * Do not use a logical icon name alone as a FlxGraphic cache key:
+	 * two mods can contain different PNGs with the same icon name.
+	 */
 	static public function imageCacheKey(key:String, ?library:String = null, ?modDir:String):String
 	{
 		#if MODS_ALLOWED
@@ -343,6 +358,10 @@ class Paths
 		return getPath('images/$key.png', IMAGE, library);
 	}
 
+	/**
+		use if you know how threads work
+		note: flxgraphic is not possible to obtain asynchronically, use bitmapToGraphic() in the main thread after fetching the bitmap
+	**/
 	static public function asyncBitmap(key:String, ?library:String = null, ?modDir:String):Null<Future<BitmapData>> {
 		var file:String = null;
 
@@ -391,6 +410,7 @@ class Paths
 		newGraphic.persist = true;
 		newGraphic.destroyOnNoUse = false;
 		currentTrackedAssets.set(file, newGraphic);
+		BitmapDiagnostics.recordGraphicCreated();
 
 		// No BitmapData replacement: keep existing FlxGraphic/FlxAtlasFrames refs valid.
 		OptimizedBitmapData.prepare(newGraphic, allowGPU);
