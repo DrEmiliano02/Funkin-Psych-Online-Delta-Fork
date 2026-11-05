@@ -29,6 +29,14 @@ class LoadingState extends MusicBeatState
 	var directory:String;
 	var callbacks:MultiCallback;
 	var targetShit:Float = 0;
+	// A failed/abandoned loading screen must not switch to an incomplete PlayState.
+	var loadFailed:Bool = false;
+	var loadFinished:Bool = false;
+	var loadReady:Bool = false;
+	var loadFailureReason:String;
+	var stateDisposed:Bool = false;
+	var introTimer:FlxTimer;
+	var errorText:FlxText;
 
 	function new(target:FlxState, stopMusic:Bool, directory:String)
 	{
@@ -45,13 +53,7 @@ class LoadingState extends MusicBeatState
 		var bg:FlxSprite = new FlxSprite(0, 0).makeGraphic(FlxG.width, FlxG.height, 0xffcaff4d);
 		bg.antialiasing = ClientPrefs.data.antialiasing;
 		add(bg);
-		// Prefer the central tracked graphic instead of opening a parallel cache entry.
-		// Fallback keeps loading screens functional before shared assets are ready.
-		var funkayGraphic = Paths.image('funkay', null, false);
-		if (funkayGraphic != null)
-			funkay = new FlxSprite(0, 0).loadGraphic(funkayGraphic);
-		else
-			funkay = new FlxSprite(0, 0).loadGraphic(Paths.getPath('images/funkay.png', IMAGE));
+		funkay = new FlxSprite(0, 0).loadGraphic(Paths.getPath('images/funkay.png', IMAGE));
 		funkay.setGraphicSize(0, FlxG.height);
 		funkay.updateHitbox();
 		add(funkay);
@@ -63,67 +65,108 @@ class LoadingState extends MusicBeatState
 		loadBar.screenCenter(X);
 		add(loadBar);
 		
-		initSongsManifest().onComplete
-		(
-			function (lib)
-			{
-				callbacks = new MultiCallback(onLoad);
-				var introComplete = callbacks.add("introComplete");
-				if (PlayState.SONG != null) {
-					checkLoadSong(getSongPath());
-					if (PlayState.SONG.needsVoices)
-						checkLoadSong(getVocalPath());
-				}
-				checkLibrary("shared");
-				if(directory != null && directory.length > 0 && directory != 'shared') {
-					checkLibrary('week_assets');
-				}
-
-				var fadeTime = 0.5;
-				FlxG.camera.fade(FlxG.camera.bgColor, fadeTime, true);
-				new FlxTimer().start(fadeTime + MIN_TIME, function(_) introComplete());
+		initSongsManifest().onComplete(function(lib)
+		{
+			if (stateDisposed || loadFailed || loadFinished) return;
+			callbacks = new MultiCallback(onLoad);
+			var introComplete = callbacks.add("introComplete");
+			if (PlayState.SONG != null) {
+				checkLoadSong(getSongPath());
+				if (PlayState.SONG.needsVoices)
+					checkLoadSong(getVocalPath());
 			}
-		);
+			checkLibrary("shared");
+			if (directory != null && directory.length > 0 && directory != 'shared')
+				checkLibrary('week_assets');
+
+			if (loadFailed) return;
+			var fadeTime = 0.5;
+			FlxG.camera.fade(FlxG.camera.bgColor, fadeTime, true);
+			introTimer = new FlxTimer().start(fadeTime + MIN_TIME, function(_) {
+				if (!stateDisposed && !loadFailed && !loadFinished) introComplete();
+			});
+		}).onError(function(error:Dynamic) {
+			failLoad('Could not load songs manifest: ' + Std.string(error));
+		});
 	}
 	
-	function checkLoadSong(path:String)
+	function failLoad(message:String):Void
 	{
+		if (stateDisposed || loadFinished || loadFailed) return;
+		// Future callbacks may not run on the game thread. The UI is created in update().
+		loadFailureReason = message;
+		loadFailed = true;
+		Log.error(message);
+	}
+
+	function checkLoadSong(path:String):Void
+	{
+		if (loadFailed || stateDisposed || path == null || path.length == 0) return;
 		if (!Assets.cache.hasSound(path))
 		{
-			var library = Assets.getLibrary("songs");
-			final symbolPath = path.split(":").pop();
-			// @:privateAccess
-			// library.types.set(symbolPath, SOUND);
-			// @:privateAccess
-			// library.pathGroups.set(symbolPath, [library.__cacheBreak(symbolPath)]);
-			var callback = callbacks.add("song:" + path);
-			Assets.loadSound(path).onComplete(function (_) { callback(); });
+			var done = callbacks.add('song:' + path);
+			try {
+				Assets.loadSound(path).onComplete(function(_) {
+					if (!stateDisposed && !loadFailed) done();
+				}).onError(function(error:Dynamic) {
+					failLoad('Sound ' + path + ': ' + Std.string(error));
+				});
+			} catch (error:Dynamic) {
+				failLoad('Sound ' + path + ': ' + Std.string(error));
+			}
 		}
 	}
-	
-	function checkLibrary(library:String) {
-		Log.infoTrace(Assets.hasLibrary(library));
-		if (Assets.getLibrary(library) == null)
-		{
-			@:privateAccess
-			if (!LimeAssets.libraryPaths.exists(library))
-				throw "Missing library: " + library;
 
-			var callback = callbacks.add("library:" + library);
-			Assets.loadLibrary(library).onComplete(function (_) { callback(); });
+	function checkLibrary(library:String):Void
+	{
+		if (loadFailed || stateDisposed || Assets.getLibrary(library) != null) return;
+		@:privateAccess
+		if (!LimeAssets.libraryPaths.exists(library)) {
+			failLoad('Missing library: ' + library);
+			return;
+		}
+
+		var done = callbacks.add('library:' + library);
+		try {
+			Assets.loadLibrary(library).onComplete(function(_) {
+				if (!stateDisposed && !loadFailed) done();
+			}).onError(function(error:Dynamic) {
+				failLoad('Library ' + library + ': ' + Std.string(error));
+			});
+		} catch (error:Dynamic) {
+			failLoad('Library ' + library + ': ' + Std.string(error));
 		}
 	}
-	
+
 	override function update(elapsed:Float)
 	{
 		super.update(elapsed);
-		// setGraphicSize/updateHitbox are unnecessary if rounded size is unchanged.
-		var newWidth:Int = Std.int(0.88 * FlxG.width + 0.9 * (funkay.width - 0.88 * FlxG.width));
-		if (newWidth != Std.int(funkay.width))
-		{
-			funkay.setGraphicSize(newWidth);
-			funkay.updateHitbox();
+		if (stateDisposed || loadFinished) return;
+		if (loadFailed) {
+			if (introTimer != null) { introTimer.cancel(); introTimer = null; }
+			if (errorText == null) {
+				errorText = new FlxText(20, FlxG.height - 145, FlxG.width - 40,
+					'Loading error: ' + loadFailureReason + '\nPress BACK to return to Freeplay.', 18);
+				errorText.color = FlxColor.WHITE;
+				errorText.scrollFactor.set();
+				add(errorText);
+			}
+			if (controls.BACK) {
+				loadFinished = true;
+				FlxG.switchState(() -> new FreeplayState());
+			}
+			return;
 		}
+		if (loadReady) {
+			loadReady = false;
+			loadFinished = true;
+			if (introTimer != null) introTimer.cancel();
+			if (stopMusic && FlxG.sound.music != null) FlxG.sound.music.stop();
+			FlxG.switchState(() -> target);
+			return;
+		}
+		funkay.setGraphicSize(Std.int(0.88 * FlxG.width + 0.9 * (funkay.width - 0.88 * FlxG.width)));
+		funkay.updateHitbox();
 		if(controls.ACCEPT)
 		{
 			funkay.setGraphicSize(Std.int(funkay.width + 60));
@@ -138,10 +181,9 @@ class LoadingState extends MusicBeatState
 	
 	function onLoad()
 	{
-		if (stopMusic && FlxG.sound.music != null)
-			FlxG.sound.music.stop();
-		
-		FlxG.switchState(() -> target);
+		if (stateDisposed || loadFailed || loadFinished) return;
+		// The actual state transition happens in update(), on the main thread.
+		loadReady = true;
 	}
 	
 	static function getSongPath()
@@ -173,7 +215,8 @@ class LoadingState extends MusicBeatState
 		#if NO_PRELOAD_ALL
 		var loaded:Bool = false;
 		if (PlayState.SONG != null) {
-			loaded = isSoundLoaded(getSongPath()) && (!PlayState.SONG.needsVoices || isSoundLoaded(getVocalPath())) && isLibraryLoaded("shared") && isLibraryLoaded('week_assets');
+			loaded = isSoundLoaded(getSongPath()) && (!PlayState.SONG.needsVoices || isSoundLoaded(getVocalPath())) && isLibraryLoaded("shared")
+				&& (directory == 'shared' || isLibraryLoaded('week_assets'));
 		}
 		
 		if (!loaded)
@@ -200,9 +243,13 @@ class LoadingState extends MusicBeatState
 	
 	override function destroy()
 	{
-		super.destroy();
-		
+		stateDisposed = true;
+		if (introTimer != null) {
+			introTimer.cancel();
+			introTimer = null;
+		}
 		callbacks = null;
+		super.destroy();
 	}
 	
 	static function initSongsManifest()

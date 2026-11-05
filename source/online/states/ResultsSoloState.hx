@@ -34,6 +34,33 @@ class ResultsSoloState extends MusicBeatState {
 	var camRotScroll:FlxCamera;
 	var camMain:FlxCamera;
 
+	// Only cancel work created by THIS results screen, never global managers.
+	var ownedTimers:Array<FlxTimer> = [];
+	var ownedTweens:Array<FlxTween> = [];
+	var ownedIntroMusic:FlxSound;
+	var stateAlive:Bool = true;
+
+	function schedule(delay:Float, callback:Void->Void):FlxTimer {
+		var timer = FlxTimer.wait(delay, () -> {
+			if (stateAlive && !exiting) callback();
+		});
+		ownedTimers.push(timer);
+		return timer;
+	}
+
+	function trackedTween(target:Dynamic, values:Dynamic, duration:Float, ?options:Dynamic):FlxTween {
+		var tween = FlxTween.tween(target, values, duration, options);
+		ownedTweens.push(tween);
+		return tween;
+	}
+
+	function cancelOwnedEffects():Void {
+		for (timer in ownedTimers) if (timer != null) timer.cancel();
+		ownedTimers = [];
+		for (tween in ownedTweens) if (tween != null) tween.cancel();
+		ownedTweens = [];
+	}
+
 	public static final DA_ANGLE = -3.5;
 
     public function new(data:ResultsData) {
@@ -289,15 +316,15 @@ class ResultsSoloState extends MusicBeatState {
 		vig.makeGraphic(FlxG.width, FlxG.height, FlxColor.BLACK);
 		add(vig);
 
-		FlxTween.tween(blackBar, {y: 0}, 0.5, {ease: FlxEase.quadOut});
-		FlxTween.tween(vig, {alpha: 0}, 0.8, {ease: FlxEase.quadOut});
+		trackedTween(blackBar, {y: 0}, 0.5, {ease: FlxEase.quadOut});
+		trackedTween(vig, {alpha: 0}, 0.8, {ease: FlxEase.quadOut});
 
-        FlxTimer.wait(0.5, () -> {
+        schedule(0.5, () -> {
 			soundSystem.visible = true;
 			soundSystem.animation.play('idle');
         });
 
-		FlxTimer.wait(1, () -> {
+		schedule(1, () -> {
 			ratingNames.visible = true;
 			ratingNames.animation.play('idle');
 
@@ -310,20 +337,20 @@ class ResultsSoloState extends MusicBeatState {
 						scoreName.animation.callback = null;
 
 						flash.alpha = 0.5;
-						FlxTween.tween(flash, {alpha: 0}, 0.3, {ease: FlxEase.quadOut});
+						trackedTween(flash, {alpha: 0}, 0.3, {ease: FlxEase.quadOut});
 						
 						var prevAcc = 0.;
-						FlxTween.tween(clearText, {value: data.accuracy}, 3.3, {ease: FlxEase.quadOut, onUpdate: tc -> {
+						trackedTween(clearText, {value: data.accuracy}, 3.3, {ease: FlxEase.quadOut, onUpdate: tc -> {
 							if (Math.floor(clearText.value * 100) > Math.floor(prevAcc * 100)) {
 								FlxG.sound.play(Paths.sound('scrollMenu'), 0.5);
 							}
 							prevAcc = clearText.value;
 						}, onComplete: _ -> {
 							flash.alpha = 0.5;
-							FlxTween.tween(flash, {alpha: 0}, 0.3, {ease: FlxEase.quadOut});
+							trackedTween(flash, {alpha: 0}, 0.3, {ease: FlxEase.quadOut});
 
 							FlxG.sound.play(Paths.sound('confirmMenu'), 0.7);
-							FlxTween.tween(clearText, {alpha: 0}, 1, {ease: FlxEase.quadOut, startDelay: 0.5});
+							trackedTween(clearText, {alpha: 0}, 1, {ease: FlxEase.quadOut, startDelay: 0.5});
 
 							songFP.visible = true;
 							songAccuracy.visible = true;
@@ -335,13 +362,13 @@ class ResultsSoloState extends MusicBeatState {
 								playMusic();
 
 							for (i => sprite in charAnimates) {
-								FlxTimer.wait(charAnimatesDelay[i], () -> {
+								schedule(charAnimatesDelay[i], () -> {
 									sprite.visible = true;
 									sprite.anim.play();
 								});
 							}
 							for (i => sprite in charSprites) {
-								FlxTimer.wait(charSpritesDelay[i], () -> {
+								schedule(charSpritesDelay[i], () -> {
 									sprite.visible = true;
 									sprite.animation.play('idle');
 								});
@@ -360,34 +387,34 @@ class ResultsSoloState extends MusicBeatState {
 			};
 
 			// idfc about making this look fancy
-			FlxTimer.wait(0.4, () -> {
+			schedule(0.4, () -> {
 				hitNotes.visible = true;
-			FlxTimer.wait(0.4, () -> {
+			schedule(0.4, () -> {
 				combo.visible = true;
-			FlxTimer.wait(0.4, () -> {
+			schedule(0.4, () -> {
 				sicks.visible = true;
-			FlxTimer.wait(0.4, () -> {
+			schedule(0.4, () -> {
 				goods.visible = true;
 				if (data.isHighscore) {
-					FlxTimer.wait(1, () -> {
+					schedule(1, () -> {
 						highscore.visible = true;
 						highscore.animation.play('idle');
 					});
 				}
-			FlxTimer.wait(0.4, () -> {
+			schedule(0.4, () -> {
 				bads.visible = true;
 				score.playAnimAllDelay('activate', 0.1);
-			FlxTimer.wait(0.4, () -> {
+			schedule(0.4, () -> {
 				shits.visible = true;
-			FlxTimer.wait(0.4, () -> {
+			schedule(0.4, () -> {
 				misses.visible = true;
 			});});});});});});});
 
 			songText.alpha = 1;
-			FlxTween.tween(songText, {y: 125}, 0.5, {ease: FlxEase.quadOut});
+			trackedTween(songText, {y: 125}, 0.5, {ease: FlxEase.quadOut});
 		});
 
-		FlxTimer.wait(6, () -> {
+		schedule(6, () -> {
 			songText.velocity.copyFrom(FlxVelocity.velocityFromAngle(DA_ANGLE, -150));
 		});
 
@@ -397,6 +424,12 @@ class ResultsSoloState extends MusicBeatState {
     }
 
 	override function destroy() {
+		stateAlive = false;
+		cancelOwnedEffects();
+		if (ownedIntroMusic != null) {
+			ownedIntroMusic.onComplete = null;
+			ownedIntroMusic = null;
+		}
 		super.destroy();
 		charSprites = [];
 		charSpritesDelay = [];
@@ -407,8 +440,9 @@ class ResultsSoloState extends MusicBeatState {
 	function playMusic() {
 		if (musicIntro != null) {
 			FlxG.sound.playMusic(musicIntro, 1, false);
-			FlxG.sound.music.onComplete = () -> {
-				if (music != null)
+			ownedIntroMusic = FlxG.sound.music;
+			ownedIntroMusic.onComplete = () -> {
+				if (stateAlive && !exiting && music != null)
 					FlxG.sound.playMusic(music);
 			};
 		}
@@ -422,6 +456,7 @@ class ResultsSoloState extends MusicBeatState {
 	var exiting:Bool = false;
 	override function update(elapsed:Float) {
 		super.update(elapsed);
+		if (!stateAlive || songText == null || rankTextos == null) return;
 
 		time += elapsed;
 
@@ -431,15 +466,18 @@ class ResultsSoloState extends MusicBeatState {
 
 		if (FlxG.sound.music != null && !exiting && (controls.ACCEPT || controls.BACK)) {
 			exiting = true;
-			FlxTimer.globalManager.clear();
-			FlxTween.globalManager.clear();
+			cancelOwnedEffects();
+			if (ownedIntroMusic != null) ownedIntroMusic.onComplete = null;
 			remove(vig, true); //splice so it doesn't go back to it's original position when re-added
 			add(vig);
-			FlxTween.tween(vig, {alpha: 1}, 0.5, {ease: FlxEase.quadIn}); // i'm not remaking the stickerstate :P
-			FlxTween.tween(FlxG.sound.music, {pitch: 3}, 0.1, {
+			trackedTween(vig, {alpha: 1}, 0.5, {ease: FlxEase.quadIn}); // i'm not remaking the stickerstate :P
+			var exitMusic = FlxG.sound.music;
+			trackedTween(exitMusic, {pitch: 3}, 0.1, {
 				onComplete: _ -> {
-					FlxTween.tween(FlxG.sound.music, {pitch: 0.5}, 0.5, {
+					if (!stateAlive || FlxG.sound.music != exitMusic) return;
+					trackedTween(exitMusic, {pitch: 0.5}, 0.5, {
 						onComplete: _ -> {
+							if (!stateAlive || FlxG.sound.music != exitMusic) return;
 							FlxG.sound.destroy(true);
 							FlxG.switchState(new states.FreeplayState());
 						}
@@ -491,6 +529,13 @@ class TallieNumbers extends FlxSpriteGroup {
 }
 
 class Seg7Numbers extends FlxSpriteGroup {
+	var animationTimers:Array<FlxTimer> = [];
+
+	override function destroy() {
+		for (timer in animationTimers) if (timer != null) timer.cancel();
+		animationTimers = [];
+		super.destroy();
+	}
 	public function new(x:Float = 0, y:Float = 0, value:Float, ?positions:Int = 10) {
 		super(x, y);
 
@@ -546,9 +591,10 @@ class Seg7Numbers extends FlxSpriteGroup {
 
 	public function playAnimAllDelay(anim:String, ?delay:Float = 0.05) {
 		for (i in 0...members.length) {
-			FlxTimer.wait(delay * i, () -> {
-				playAnim(i, anim);
-			});
+			animationTimers.push(FlxTimer.wait(delay * i, () -> {
+				if (!destroyed && members != null && i < members.length && members[i] != null)
+					playAnim(i, anim);
+			}));
 		}
 	}
 

@@ -54,71 +54,134 @@ class GameClient {
 	@:unreflective
 	public static var serverAddresses(default, null):Array<String> = [];
 
+	// Room requests must not call leaveRoom(): that function schedules a State switch
+	// back to OnlineState, which can race with a successful host/join request.
+	private static var roomRequestGeneration:Int = 0;
+	private static var roomRequestPending:Bool = false;
+	private static inline var ROOM_REQUEST_TIMEOUT:Float = 15.0;
+
+	private static function closeRoomSilently(oldRoom:Room<online.backend.schema.Room>):Void {
+		if (oldRoom == null) return;
+		try {
+			if (oldRoom.connection != null) {
+				oldRoom.teardown();
+				oldRoom.leave(true);
+			}
+		} catch (exc:Dynamic) {
+			Log.error('Room cleanup failed: ' + Std.string(exc));
+		}
+	}
+
+	private static function beginRoomRequest():Int {
+		var previousRoom = GameClient.room;
+		// Disconnect an old room, without replacing the menu being used to host.
+		GameClient.room = null;
+		GameClient.client = null;
+		GameClient.address = null;
+		GameClient.rpcClientRoomID = null;
+		Waiter.pingServer = null;
+		reconnecting = false;
+		_pendingMessages = [];
+		if (previousRoom != null) Waiter.putPersist(() -> closeRoomSilently(previousRoom));
+		roomRequestPending = true;
+		roomRequestGeneration++;
+		return roomRequestGeneration;
+	}
+
+	private static function failRoomRequest(generation:Int, reason:String, ?onJoin:(err:Dynamic)->Void):Void {
+		if (!roomRequestPending || generation != roomRequestGeneration) return;
+		roomRequestPending = false;
+		roomRequestGeneration++; // Discard callbacks arriving after a failed request.
+		GameClient.client = null;
+		GameClient.room = null;
+		GameClient.address = null;
+		GameClient.rpcClientRoomID = null;
+		Waiter.pingServer = null;
+		_pendingMessages = [];
+		LoadingScreen.toggle(false);
+		Alert.alert("Couldn't connect!", reason);
+		if (onJoin != null) onJoin(new Error(-1, reason));
+	}
+
+	private static function scheduleRoomRequestTimeout(generation:Int, ?onJoin:(err:Dynamic)->Void):Void {
+		Waiter.putDelayedPersist(() -> {
+			if (generation == roomRequestGeneration && roomRequestPending && GameClient.room == null)
+				failRoomRequest(generation, 'Room creation/join timed out. You can retry or go back.', onJoin);
+		}, ROOM_REQUEST_TIMEOUT);
+	}
+
 	public static function createRoom(address:String, ?onJoin:(err:Dynamic)->Void) {
-		if (reconnecting)
-			return;
-
+		if (reconnecting || roomRequestPending) return;
+		var generation = beginRoomRequest();
 		LoadingScreen.toggle(true);
-
-		leaveRoom('Switching Rooms.');
 		ChatBox.clearLogs();
-		
-		Thread.run(() -> {
-			client = new Client(address);
-			_pendingMessages = [];
+		scheduleRoomRequestTimeout(generation, onJoin);
 
-			client.create("room", getOptions(true, address), online.backend.schema.Room, (err, room) -> _onJoin(err, room, true, address, onJoin));
-		}, (exc) -> {
-			if (onJoin != null) onJoin(exc);
-			LoadingScreen.toggle(false);
-			Log.error(exc);
-			Alert.alert("Failed to connect!", exc.details());
-		});
-    }
+		Thread.run(() -> {
+			var requestedClient = new Client(address);
+			requestedClient.create('room', getOptions(true, address), online.backend.schema.Room, (err, newRoom) -> {
+				Waiter.putPersist(() -> {
+					if (generation != roomRequestGeneration || !roomRequestPending) {
+						closeRoomSilently(newRoom);
+						return;
+					}
+					GameClient.client = requestedClient;
+					_onJoin(err, newRoom, true, address, onJoin);
+				});
+			});
+		}, (exc) -> Waiter.putPersist(() -> {
+			if (generation == roomRequestGeneration)
+				failRoomRequest(generation, Std.string(exc), onJoin);
+		}));
+	}
 
 	public static function joinRoom(roomSecret:String, ?onJoin:(err:Dynamic)->Void) {
-		if (reconnecting)
-			return;
-
+		if (reconnecting || roomRequestPending) return;
+		var generation = beginRoomRequest();
 		LoadingScreen.toggle(true);
-
-		leaveRoom('Switching Rooms.');
 		ChatBox.clearLogs();
 
 		var roomID = roomSecret.trim();
 		var roomAddress = GameClient.serverAddress;
-		var coolIndex = roomSecret.indexOf(";");
+		var coolIndex = roomSecret.indexOf(';');
 		if (coolIndex != -1) {
 			roomID = roomSecret.substring(0, coolIndex).trim();
 			roomAddress = roomSecret.substring(coolIndex + 1).trim();
 		}
+		scheduleRoomRequestTimeout(generation, onJoin);
 
 		Thread.run(() -> {
-			client = new Client(roomAddress);
-			_pendingMessages = [];
-
-			client.joinById(roomID, getOptions(false, roomAddress), online.backend.schema.Room, (err, room) -> _onJoin(err, room, false, roomAddress, onJoin));
-		}, (exc) -> {
-			if (onJoin != null) onJoin(exc);
-			LoadingScreen.toggle(false);
-			Log.error(exc);
-			Alert.alert("Failed to connect!", exc.toString());
-		});
-    }
+			var requestedClient = new Client(roomAddress);
+			requestedClient.joinById(roomID, getOptions(false, roomAddress), online.backend.schema.Room, (err, newRoom) -> {
+				Waiter.putPersist(() -> {
+					if (generation != roomRequestGeneration || !roomRequestPending) {
+						closeRoomSilently(newRoom);
+						return;
+					}
+					GameClient.client = requestedClient;
+					_onJoin(err, newRoom, false, roomAddress, onJoin);
+				});
+			});
+		}, (exc) -> Waiter.putPersist(() -> {
+			if (generation == roomRequestGeneration)
+				failRoomRequest(generation, Std.string(exc), onJoin);
+		}));
+	}
 
 	private static function _onJoin(err:Error, room:Room<online.backend.schema.Room>, isHost:Bool, address:String, ?onJoin:(err:Dynamic)->Void) {
-		if (err != null) {
-			Log.error(err.code + " - " + err.message);
-			Alert.alert("Couldn't connect!", "JOIN ERROR: " + ShitUtil.prettyStatus(err.code) + "\n" + ShitUtil.readableError(err.message));
-			if (onJoin != null) onJoin(err);
-			leaveRoom();
-			LoadingScreen.toggle(false);
-			if (err.code == 5003)
+		if (err != null || room == null) {
+			var message = err == null ? 'Server did not return a room.' :
+				'JOIN ERROR: ' + ShitUtil.prettyStatus(err.code) + "\n" + ShitUtil.readableError(err.message);
+			Log.error(message);
+			var failedGeneration = roomRequestGeneration;
+			failRoomRequest(failedGeneration, message, onJoin);
+			if (err != null && err.code == 5003)
 				Waiter.putPersist(() -> {
 					FlxG.switchState(() -> new OutdatedState());
 				});
 			return;
 		}
+		roomRequestPending = false;
 		LoadingScreen.toggle(false);
 
 		GameClient.room = room;
@@ -158,11 +221,22 @@ class GameClient {
 			checkState = function() {
 				if (GameClient.room != room) return;
 				if (getPlayerSelf() != null) {
-					// State/schema callbacks may only be ready after the first state message.
-					clearOnMessage();
+					// Message handlers were installed once in _onJoin. Do NOT clear them here:
+					// this can remove an incoming checkChart event needed to enter RoomState.
 					Log.info("Joined the room!");
 					FlxG.autoPause = false;
 					if (onJoin != null) onJoin(null);
+					// The usual checkChart handler takes precedence. Only recover when
+					// OnlineState is still on-screen after the room state became ready.
+					Waiter.putDelayedPersist(() -> {
+						if (GameClient.room == room && getPlayerSelf() != null
+							&& FlxG.state is OnlineState
+							&& !(FlxG.state.subState is backend.CustomFadeTransition)
+							&& @:privateAccess FlxG.game._nextState == null) {
+							Log.warn('Host/join fallback: room state ready but OnlineState was not exited.');
+							FlxG.switchState(() -> new RoomState());
+						}
+					}, 2.5);
 				} else if (haxe.Timer.stamp() >= deadline) {
 					Alert.alert("Couldn't connect!", "Client couldn't receive server's state data!");
 					if (onJoin != null) onJoin(new Error(-1, 'no state data'));
@@ -275,6 +349,18 @@ class GameClient {
 	}
 
 	public static function leaveRoom(?reason:String = null) {
+		var wasRequestingRoom = roomRequestPending;
+		roomRequestGeneration++; // Invalidate late create/join responses and timeouts.
+		roomRequestPending = false;
+		if (wasRequestingRoom && GameClient.room == null) {
+			GameClient.client = null;
+			GameClient.address = null;
+			GameClient.rpcClientRoomID = null;
+			Waiter.pingServer = null;
+			_pendingMessages = [];
+			LoadingScreen.toggle(false);
+			return; // No lobby to leave and no automatic menu State transition.
+		}
 		Waiter.pingServer = null;
 		var wasConnected:Bool = isConnected();
 		reconnecting = false;

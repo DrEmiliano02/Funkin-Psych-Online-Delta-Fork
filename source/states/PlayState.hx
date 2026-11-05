@@ -532,6 +532,12 @@ class PlayState extends MusicBeatState
 	var showTime:Bool;
 	var camPos:FlxPoint;
 	var asyncLoop:FlxAsyncLoop;
+	// Cancellable delayed nameplate effects and the music callback belong to this state.
+	var nameplateTimers:Array<FlxTimer> = [];
+	var nameplateTweens:Array<FlxTween> = [];
+	var gameplayMusic:FlxSound;
+	var loadingCameraFade:FlxTween;
+	var playStateDisposing:Bool = false;
 	// Loading UI shared by create() and progressive precache in update().
 	var loaderGroup:online.objects.LoadingSprite;
 	// Shared by create() and update() for per-file loading progress.
@@ -1642,7 +1648,11 @@ class PlayState extends MusicBeatState
 		
 		// var i = 0;
 		asyncLoop = new FlxAsyncLoop(preloadTasks.length, () -> {
-			preloadTasks.shift()();
+			if (playStateDisposing || preloadTasks == null || preloadTasks.length == 0) return;
+			var nextTask = preloadTasks.shift();
+			if (nextTask == null) return;
+			nextTask();
+			if (playStateDisposing) return;
 			// Log.trace(i++, Math.abs(FlxMath.roundDecimal(openfl.system.System.totalMemory / 1000000, 1)));
 
 			loaderGroup.addProgress(preloadTasks.length);
@@ -1650,9 +1660,11 @@ class PlayState extends MusicBeatState
 			if (preloadTasks.length <= 0) {
 				isCreated = true;
 
-				FlxTween.tween(camLoading, {alpha: 0}, 0.5, {ease: FlxEase.circOut, onComplete: t -> {
+				loadingCameraFade = FlxTween.tween(camLoading, {alpha: 0}, 0.5, {ease: FlxEase.circOut, onComplete: t -> {
+					if (playStateDisposing || loaderGroup == null) return;
 					loaderGroup.killMembers();
-					FlxG.cameras.remove(camLoading, true);
+					if (FlxG.cameras.list.contains(camLoading))
+						FlxG.cameras.remove(camLoading, true);
 				}});
 
 				if (redditMod) {
@@ -1670,9 +1682,10 @@ class PlayState extends MusicBeatState
 				add(nameplates);
 				if (ClientPrefs.data.nameplateFadeTime > 0) {
 					for (nameplate in nameplates) {
-						new FlxTimer().start(ClientPrefs.data.nameplateFadeTime, function(tmr:FlxTimer) {
-							FlxTween.tween(nameplate, {alpha: 0}, 1);
-						});
+						nameplateTimers.push(new FlxTimer().start(ClientPrefs.data.nameplateFadeTime, function(tmr:FlxTimer) {
+							if (!playStateDisposing && nameplate != null)
+								nameplateTweens.push(FlxTween.tween(nameplate, {alpha: 0}, 1));
+						}));
 					}
 				}
 
@@ -2533,7 +2546,10 @@ class PlayState extends MusicBeatState
 		@:privateAccess
 		FlxG.sound.playMusic(inst._sound, 1, false);
 		#if FLX_PITCH FlxG.sound.music.pitch = playbackRate; #end
-		FlxG.sound.music.onComplete = finishSong.bind();
+		gameplayMusic = FlxG.sound.music;
+		gameplayMusic.onComplete = () -> {
+			if (!playStateDisposing) finishSong();
+		};
 		vocals.play();
 		opponentVocals.play();
 
@@ -3292,6 +3308,7 @@ class PlayState extends MusicBeatState
 			return;
 
 		if (!isCreated) {
+			if (asyncLoop == null || playStateDisposing) return;
 			if (!asyncLoop.started) {
 				asyncLoop.start();
 			}
@@ -5935,9 +5952,33 @@ class PlayState extends MusicBeatState
 	}
 
 	override function destroy() {
-		// No conservar referencias a tareas de una carga interrumpida.
+		playStateDisposing = true;
+		// Stop work owned by this instance; leave global timers/tweens alone.
+		if (asyncLoop != null) asyncLoop.active = false;
+		preloadTasks = [];
 		progressivePrecache = null;
 		progressivePrecacheIndex = 0;
+		FlxG.cameras.cameraAdded.remove(realignLoadCam);
+		for (timer in nameplateTimers) if (timer != null) timer.cancel();
+		nameplateTimers = [];
+		for (tween in nameplateTweens) if (tween != null) tween.cancel();
+		nameplateTweens = [];
+		if (startTimer != null) startTimer.cancel();
+		if (finishTimer != null) finishTimer.cancel();
+		if (gameOverTimer != null) gameOverTimer.cancel();
+		if (loadingCameraFade != null) loadingCameraFade.cancel();
+		if (readyTween != null) readyTween.cancel();
+		if (freakyFlicker != null) freakyFlicker.stop();
+		if (songSpeedTween != null) songSpeedTween.cancel();
+		if (cameraTwn != null) cameraTwn.cancel();
+		if (cameraTwnPos != null) cameraTwnPos.cancel();
+		if (cameraTwnX != null) cameraTwnX.cancel();
+		if (cameraTwnY != null) cameraTwnY.cancel();
+		if (scoreTxtTween != null) scoreTxtTween.cancel();
+		if (noteTimingRatingTween != null) noteTimingRatingTween.cancel();
+		for (tween in scoreTxtOthersTween) if (tween != null) tween.cancel();
+		if (gameplayMusic != null) gameplayMusic.onComplete = null;
+		gameplayMusic = null;
 
 		#if LUA_ALLOWED
 		for (i in 0...luaArray.length) {
@@ -5977,12 +6018,12 @@ class PlayState extends MusicBeatState
 		FlxG.camera.filters = [];
 
 		FlxG.animationTimeScale = 1;
-		#if FLX_PITCH FlxG.sound.music.pitch = 1; #end
+		#if FLX_PITCH if (FlxG.sound.music != null) FlxG.sound.music.pitch = 1; #end
 
 		Note.globalRgbShaders = [];
 		backend.NoteTypesConfig.clearNoteTypesData();
 
-		instance = null;
+		if (instance == this) instance = null;
 		orderOffset = 0;
 		// if (stage3D != null) {
 		// 	Main.backSprite.removeChild(stage3D);
@@ -6014,6 +6055,7 @@ class PlayState extends MusicBeatState
 	}
 
 	public static function cancelMusicFadeTween() {
+		if (FlxG.sound.music == null) return;
 		if(FlxG.sound.music.fadeTween != null) {
 			FlxG.sound.music.fadeTween.cancel();
 		}
@@ -6752,9 +6794,11 @@ class PlayState extends MusicBeatState
 		if (!GameClient.isConnected())
 			return;
 
+		final registeredRoom = GameClient.room;
 		for (sid => player in GameClient.room.state.players) {
 			GameClient.callbacks.listen(player, "ping", (value, prev) -> {
 				Waiter.put(() -> {
+					if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 					if (callOnScripts('onPlayerPing', [sid, player.ping], true) == FunkinLua.Function_Stop)
 						return;
 	
@@ -6768,6 +6812,7 @@ class PlayState extends MusicBeatState
 
 			GameClient.callbacks.listen(player, "botplay", (value, prev) -> {
 				Waiter.put(() -> {
+					if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 					if (callOnScripts('onPlayerBotplay', [sid, value], true) == FunkinLua.Function_Stop)
 						return;
 	
@@ -6777,6 +6822,7 @@ class PlayState extends MusicBeatState
 
 			GameClient.callbacks.listen(player, "noteHold", (value, prev) -> {
 				Waiter.put(() -> {
+					if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 					if (callOnScripts('onPlayerNoteHold', [sid, value], true) == FunkinLua.Function_Stop)
 						return;
 
@@ -6787,27 +6833,31 @@ class PlayState extends MusicBeatState
 		}
 
 		GameClient.room.onMessage("custom", function(message:Array<Dynamic>) {
-			if (message.length != 2)
+			if (message == null || message.length != 2)
 				return;
 
 			Waiter.put(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				callOnScripts('onCustomMessage', message);
 			});
 		});
 
 		GameClient.room.onMessage("log", function(message) {
 			Waiter.putPersist(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				Alert.alert("New message", online.util.ShitUtil.parseLog(message).content);
 			});
 		});
 
 		GameClient.room.onMessage("strumPlay", function(_message:Array<Dynamic>) {
+			if (_message == null || _message.length < 2) return;
 			var sid:String = _message[0];
 			var message:Array<Dynamic> = _message[1];
 
 			// scrapped: make it so with tab you can switch to someone's else strum line
 
 			Waiter.put(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				if (message == null || message[0] == null || message[1] == null || message[2] == null)
 					return;
 
@@ -6827,10 +6877,12 @@ class PlayState extends MusicBeatState
 		});
 
 		GameClient.room.onMessage("charPlay", function(_message:Array<Dynamic>) {
+			if (_message == null || _message.length < 2) return;
 			var sid:String = _message[0];
 			var message:Array<Dynamic> = _message[1];
 
 			Waiter.put(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				if (message == null || message[0] == null)
 					return;
 
@@ -6855,10 +6907,12 @@ class PlayState extends MusicBeatState
 		});
 
 		GameClient.room.onMessage("noteHit", function(_message:Array<Dynamic>) {
+			if (_message == null || _message.length < 2) return;
 			var sid:String = _message[0];
 			var message:Array<Dynamic> = _message[1];
 
 			Waiter.put(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				if (message == null || message[0] == null || message[1] == null || message[2] == null)
 					return;
 
@@ -6889,10 +6943,12 @@ class PlayState extends MusicBeatState
 		});
 
 		GameClient.room.onMessage("noteMiss", function(_message:Array<Dynamic>) {
+			if (_message == null || _message.length < 2) return;
 			var sid:String = _message[0];
 			var message:Array<Dynamic> = _message[1];
 
 			Waiter.put(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				if (message == null || message[0] == null || message[1] == null || message[2] == null)
 					return;
 
@@ -6920,6 +6976,7 @@ class PlayState extends MusicBeatState
 
 		GameClient.room.onMessage("startSong", function(_) {
 			Waiter.put(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				if (callOnScripts('onMessageStartSong', null, true) == FunkinLua.Function_Stop)
 					return;
 
@@ -6931,6 +6988,7 @@ class PlayState extends MusicBeatState
 
 		GameClient.room.onMessage("endSong", function(_) {
 			Waiter.put(() -> {
+				if (playStateDisposing || FlxG.state != this || !GameClient.isConnected() || GameClient.room != registeredRoom) return;
 				if (callOnScripts('onMessageEndSong', null, true) == FunkinLua.Function_Stop)
 					return;
 

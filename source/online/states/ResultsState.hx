@@ -31,6 +31,25 @@ class ResultsState extends MusicBeatState {
 
 	var chatBox:ChatBox;
 	var disableInput = true;
+	var stateAlive:Bool = true;
+	var ownedTimers:Array<FlxTimer> = [];
+	var ownedTweens:Array<FlxTween> = [];
+	var spotlightFlicker:FlxFlicker;
+	var rewardFlicker:FlxFlicker;
+	var resultIntroMusic:FlxSound;
+
+	function schedule(delay:Float, callback:Void->Void):FlxTimer {
+		var timer = FlxTimer.wait(delay, () -> { if (stateAlive) callback(); });
+		ownedTimers.push(timer);
+		return timer;
+	}
+
+	function trackedTween(target:Dynamic, values:Dynamic, duration:Float, ?options:Dynamic):FlxTween {
+		var tween = FlxTween.tween(target, values, duration, options);
+		ownedTweens.push(tween);
+		return tween;
+	}
+
 
 	var dim:FlxSprite;
 	var spotlight:FlxSprite;
@@ -79,7 +98,7 @@ class ResultsState extends MusicBeatState {
 		Mods.loadTopMod();
 		WeekData.setDirectoryFromWeek();
         
-        FlxG.sound.music.stop();
+        if (FlxG.sound.music != null) FlxG.sound.music.stop();
 
 		#if lumod
 		if (luaValue == false)
@@ -191,7 +210,8 @@ class ResultsState extends MusicBeatState {
 		add(gainedText);
 
 		#if !DEBUG_RESULTS
-		if (!GameClient.isConnected()) {
+		if (!GameClient.isConnected() || GameClient.room == null || GameClient.room.state == null
+			|| GameClient.room.state.players == null || GameClient.room.state.players.length == 0) {
 			FlxG.switchState(() -> new OnlineState());
 			return;
 		}
@@ -317,11 +337,11 @@ class ResultsState extends MusicBeatState {
 		}
 
 		var avgValueBySide = [
-			sumValueBySide[0] / playersBySide[0],
-			sumValueBySide[1] / playersBySide[1]
+			playersBySide[0] > 0 ? sumValueBySide[0] / playersBySide[0] : 0,
+			playersBySide[1] > 0 ? sumValueBySide[1] / playersBySide[1] : 0
 		];
 
-		if (playersWValue.get(prevWValue + '').length >= 2) {
+		if (playersWValue.get(prevWValue + '') != null && playersWValue.get(prevWValue + '').length >= 2) {
 			if (!GameClient.room.state.teamMode) {
 				isTie = true;
 			}
@@ -395,9 +415,11 @@ class ResultsState extends MusicBeatState {
 					}
 				}
 
-				win.x = (avgWinTeamMidX / avgWinTeamMidXNums) - win.width / 2;
+				if (avgWinTeamMidXNums > 0)
+					win.x = (avgWinTeamMidX / avgWinTeamMidXNums) - win.width / 2;
 
-				if (winnerBfSide == characters.get(GameClient.room.sessionId).player.bfSide) {
+				var ownCharacter = characters.get(GameClient.room.sessionId);
+				if (ownCharacter != null && winnerBfSide == ownCharacter.player.bfSide) {
 					rank = charData.GOOD;
 					if (winnerSID == GameClient.room.sessionId) {
 						rank = charData.EXCELLENT;
@@ -408,7 +430,9 @@ class ResultsState extends MusicBeatState {
 				}
 			}
 			else {
-				win.x = characters.get(winnerSID).profileBox.getMidpoint().x - win.width / 2;
+				var winningCharacter = characters.get(winnerSID);
+				if (winningCharacter != null)
+					win.x = winningCharacter.profileBox.getMidpoint().x - win.width / 2;
 
 				if (winnerSID == GameClient.room.sessionId) {
 					rank = charData.GOOD;
@@ -419,8 +443,7 @@ class ResultsState extends MusicBeatState {
 			}
 		}
 
-		playResultsMusic();
-		FlxG.sound.music.stop();
+		playResultsMusic(); // Do not immediately stop the track that was just started.
 
 		// #if DISCORD_ALLOWED
 		// DiscordClient.changePresence(
@@ -453,10 +476,13 @@ class ResultsState extends MusicBeatState {
 		spotlight.visible = false;
 		if (!isTie) {
 			if (GameClient.room.state.teamMode) {
-				spotlight.x = (avgWinTeamMidX / avgWinTeamMidXNums) - spotlight.width / 2;
+				if (avgWinTeamMidXNums > 0)
+					spotlight.x = (avgWinTeamMidX / avgWinTeamMidXNums) - spotlight.width / 2;
 			}
 			else {
-				spotlight.x = characters.get(winnerSID).profileBox.getMidpoint().x - spotlight.width / 2;
+				var winningCharacter = characters.get(winnerSID);
+				if (winningCharacter != null)
+					spotlight.x = winningCharacter.profileBox.getMidpoint().x - spotlight.width / 2;
 			}
 		}
 		spotlight.x -= 20;
@@ -467,14 +493,14 @@ class ResultsState extends MusicBeatState {
 		chatBox.cameras = [camHUD];
 		add(chatBox);
 
-		FlxTween.tween(dim, {alpha: 0.15}, 2, {ease: FlxEase.quadInOut});
-		FlxTween.tween(back, {alpha: 1}, 1, {ease: FlxEase.quartInOut, startDelay: 2.0});
+		trackedTween(dim, {alpha: 0.15}, 2, {ease: FlxEase.quadInOut});
+		trackedTween(back, {alpha: 1}, 1, {ease: FlxEase.quartInOut, startDelay: 2.0});
 
-		new FlxTimer().start(3, (t) -> {
+		schedule(3, () -> {
 			disableInput = false;
 		});
 
-		new FlxTimer().start(1, (t) -> {
+		schedule(1, () -> {
 			for (sid => player in characters) {
 				player.profileBox.visible = true;
 				player.profileBox.avatar.visible = player.player.verified;
@@ -529,35 +555,35 @@ class ResultsState extends MusicBeatState {
 			}
 
 			if (!isTie) {
-				FlxTween.tween(win, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
+				trackedTween(win, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
 				if (ClientPrefs.data.flashing) {
 					flickerLoop();
 				}
 				spotlight.visible = true;
 			}
 			else {
-				FlxTween.tween(tie, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
+				trackedTween(tie, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
 			}
 
 			playResultsMusic();
 
-			// FlxTween.tween(p1Text, {alpha: 1}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
-			// FlxTween.tween(p2Text, {alpha: 1}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
-			// FlxTween.tween(p1Bg, {alpha: 0.5}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
-			// FlxTween.tween(p2Bg, {alpha: 0.5}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
+			// trackedTween(p1Text, {alpha: 1}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
+			// trackedTween(p2Text, {alpha: 1}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
+			// trackedTween(p1Bg, {alpha: 0.5}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
+			// trackedTween(p2Bg, {alpha: 0.5}, 1, {ease: FlxEase.quartInOut, startDelay: 1});
 
 			// if (winner > -1) {
-			// 	FlxTween.tween(win, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
-			// 	FlxTween.tween(lose, {alpha: 1, angle: 3}, 0.5, {ease: FlxEase.quadInOut});
-			// 	FlxTween.tween(lose, {angle: 0}, 0.2, {ease: FlxEase.quadInOut});
+			// 	trackedTween(win, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
+			// 	trackedTween(lose, {alpha: 1, angle: 3}, 0.5, {ease: FlxEase.quadInOut});
+			// 	trackedTween(lose, {angle: 0}, 0.2, {ease: FlxEase.quadInOut});
 			// 	if (ClientPrefs.data.flashing) {
 			// 		flickerLoop();
 			// 	}
 			// 	spotlight.visible = true;
 			// }
 			// else {
-			// 	FlxTween.tween(dim, {alpha: 0}, 1, {ease: FlxEase.quadInOut});
-			// 	FlxTween.tween(tie, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
+			// 	trackedTween(dim, {alpha: 0}, 1, {ease: FlxEase.quadInOut});
+			// 	trackedTween(tie, {alpha: 1}, 0.5, {ease: FlxEase.quadInOut});
 			// }
 
 			if (gainedPoints > 0) {
@@ -565,11 +591,11 @@ class ResultsState extends MusicBeatState {
 				gainedText.text = '+ ${gainedPoints}FP';
 				FlxG.sound.play(Paths.sound('fap'));
 				if (ClientPrefs.data.flashing)
-					FlxFlicker.flicker(gainedText, 0.4, 0.05, true);
-				FlxTween.tween(gainedText, {alpha: 0.2}, 2, {ease: FlxEase.quadInOut});
+					rewardFlicker = FlxFlicker.flicker(gainedText, 0.4, 0.05, true);
+				trackedTween(gainedText, {alpha: 0.2}, 2, {ease: FlxEase.quadInOut});
 
-				new FlxTimer().start(2, (t) -> {
-					FlxTween.tween(gainedText, {x: back.x, y: back.y - 50, size: 25}, 1, {ease: FlxEase.quartOut});
+				schedule(2, () -> {
+					trackedTween(gainedText, {x: back.x, y: back.y - 50, size: 25}, 1, {ease: FlxEase.quartOut});
 				});
 			}
 
@@ -586,33 +612,46 @@ class ResultsState extends MusicBeatState {
     }
 
 	override function destroy() {
+		stateAlive = false;
+		for (timer in ownedTimers) if (timer != null) timer.cancel();
+		ownedTimers = [];
+		for (tween in ownedTweens) if (tween != null) tween.cancel();
+		ownedTweens = [];
+		if (spotlightFlicker != null) spotlightFlicker.stop();
+		if (rewardFlicker != null) rewardFlicker.stop();
+		if (resultIntroMusic != null) resultIntroMusic.onComplete = null;
+		resultIntroMusic = null;
 		super.destroy();
-		characters.clear(); // Soltar referencias a LobbyCharacter ya destruidos.
+		characters.clear();
 	}
 
 	function registerMessages() {
 		GameClient.initStateListeners(this, this.registerMessages);
 
 		if (GameClient.isConnected()) {
+			final registeredRoom = GameClient.room;
 			GameClient.send("status", "Viewing results");
 
 			GameClient.room.onMessage("charPlay", function(_message:Array<Dynamic>) {
+				if (_message == null || _message.length < 2) return;
 				var sid:String = _message[0];
 				var message:Array<Dynamic> = _message[1];
 
 				Waiter.put(() -> {
-					if (message == null || message[0] == null)
-						return;
-
-					characters.get(sid).character.playAnim(message[0], true);
+					if (!stateAlive || !GameClient.isConnected() || GameClient.room != registeredRoom
+						|| message == null || message.length == 0 || message[0] == null) return;
+					var player = characters.get(sid);
+					if (player != null && player.character != null)
+						player.character.playAnim(message[0], true);
 				});
 			});
 		}
 	}
 
 	function flickerLoop() {
-		FlxFlicker.flicker(spotlight, 0.2, 0.05, true);
-		new FlxTimer().start(FlxG.random.int(3, 12), (t) -> {
+		if (!stateAlive || spotlight == null) return;
+		spotlightFlicker = FlxFlicker.flicker(spotlight, 0.2, 0.05, true);
+		schedule(FlxG.random.int(3, 12), () -> {
 			if (!destroyed) {
 				flickerLoop();
 			}
@@ -622,7 +661,9 @@ class ResultsState extends MusicBeatState {
 	function playResultsMusic() {
 		if (rank == null) {
 			FlxG.sound.playMusic(Paths.music('title'), 0);
-			FlxG.sound.music.onComplete = () -> {
+			resultIntroMusic = FlxG.sound.music;
+			resultIntroMusic.onComplete = () -> {
+				if (!stateAlive) return;
 				var msc = null;
 				if (ClientPrefs.data.currentSkin != null) {
 					ShitUtil.tempSwitchMod(ClientPrefs.data.currentSkin[3], () -> {
@@ -675,24 +716,28 @@ class ResultsState extends MusicBeatState {
 				back.animation.play('idle');
 
 			if (!chatBox.focused && (!FlxG.keys.justPressed.TAB && controls.BACK || FlxG.keys.justPressed.BACKSPACE || FlxG.keys.justPressed.ENTER)) {
-				FlxG.sound.music.stop();
+				if (FlxG.sound.music != null) FlxG.sound.music.stop();
 				FlxG.sound.play(Paths.sound('cancelMenu'));
 
 				disableInput = true;
 				back.animation.play('press');
 				back.offset.set(80, 50);
 				if (gainedText.visible)
-					FlxTween.tween(gainedText, {alpha: 0}, 0.2, {ease: FlxEase.quadInOut});
-                new FlxTimer().start(0.5, (t) -> {
-					FlxG.switchState(() -> new RoomState());
+					trackedTween(gainedText, {alpha: 0}, 0.2, {ease: FlxEase.quadInOut});
+                schedule(0.5, () -> {
+					if (!stateAlive) return;
+					if (GameClient.isConnected()) FlxG.switchState(() -> new RoomState());
+					else FlxG.switchState(() -> new OnlineState());
                 });
             }
 
-			if (!chatBox.focused && controls.TAUNT) {
-				var altSuffix = FlxG.keys.pressed.ALT ? '-alt' : '';
-				characters.get(GameClient.room.sessionId).character.playAnim('taunt' + altSuffix, true);
-				if (GameClient.isConnected())
+			if (!chatBox.focused && controls.TAUNT && GameClient.isConnected()) {
+				var selfCharacter = characters.get(GameClient.room.sessionId);
+				if (selfCharacter != null && selfCharacter.character != null) {
+					var altSuffix = FlxG.keys.pressed.ALT ? '-alt' : '';
+					selfCharacter.character.playAnim('taunt' + altSuffix, true);
 					GameClient.send("charPlay", ["taunt" + altSuffix]);
+				}
 			}
         }
         else {
