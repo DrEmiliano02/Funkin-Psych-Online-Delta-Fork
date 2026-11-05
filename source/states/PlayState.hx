@@ -35,7 +35,6 @@ import online.backend.Waiter;
 import online.states.RoomState;
 import online.GameClient;
 import online.objects.NicommentsView;
-import backend.system.BitmapDiagnostics;
 import backend.Achievements;
 import backend.Highscore;
 import backend.StageData;
@@ -628,12 +627,8 @@ class PlayState extends MusicBeatState
 			}
 		}
 
-		// Keep a record of the previous state's live resources before cleanup.
-        BitmapDiagnostics.beginSong(SONG != null ? SONG.song : "(unknown)");
-        BitmapDiagnostics.snapshot("before previous-state cleanup");
 		Paths.clearUnusedMemory();
 		Paths.clearStoredMemory();
-        BitmapDiagnostics.snapshot("after previous-state cleanup");
 
 		// disable GC
 		// #if cpp
@@ -1689,9 +1684,7 @@ class PlayState extends MusicBeatState
 
 				// Clean unused old graphics ONLY after the final preload task.
 				// Loaded / preloaded assets remain registered in localTrackedAssets.
-                BitmapDiagnostics.snapshot("before ready cleanup");
 				Paths.clearUnusedMemory(false);
-                BitmapDiagnostics.snapshot("song ready / after cleanup");
 
 				// Se libera lo que ya no se usa, sin System.gc() ni compactacion
 				// forzados justo antes de comenzar la cancion.
@@ -3334,7 +3327,6 @@ class PlayState extends MusicBeatState
 						+ ' ms; pico RAM observado: '
 						+ Std.int(progressivePrecachePeakRAM / (1024 * 1024)) + ' MiB');
 					#end
-                    BitmapDiagnostics.snapshot("after progressive precache");
 					progressivePrecache = null;
 					progressivePrecacheIndex = 0;
 					asyncLoop.active = true;

@@ -464,7 +464,6 @@ class SkinsState extends MusicBeatState {
 		CustomFadeTransition.nextCamera = hud; // wat
 
 		GameClient.send("status", "Selecting their skin");
-		backend.system.BitmapDiagnostics.snapshot("SkinsState ready");
     }
 
 	function getCharacterName(i:Int) {
@@ -821,13 +820,11 @@ class SkinsState extends MusicBeatState {
 	}
 
 	override function destroy() {
-		backend.system.BitmapDiagnostics.snapshot("SkinsState before destroy");
 		if (selectTimer != null) {
 			selectTimer.cancel();
 			selectTimer = null;
 		}
 		super.destroy();
-		backend.system.BitmapDiagnostics.snapshot("SkinsState after destroy");
 
 		if (skipStaticDestroy)
 			return;

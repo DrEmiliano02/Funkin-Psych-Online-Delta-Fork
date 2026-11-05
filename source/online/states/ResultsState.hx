@@ -583,14 +583,11 @@ class ResultsState extends MusicBeatState {
 		var debugPoser = new online.objects.DebugPosHelper();
 		debugPoser.cameras = [camHUD];
 		add(debugPoser);
-		backend.system.BitmapDiagnostics.snapshot("ResultsState ready");
     }
 
 	override function destroy() {
-		backend.system.BitmapDiagnostics.snapshot("ResultsState before destroy");
 		super.destroy();
 		characters.clear(); // Soltar referencias a LobbyCharacter ya destruidos.
-		backend.system.BitmapDiagnostics.snapshot("ResultsState after destroy");
 	}
 
 	function registerMessages() {

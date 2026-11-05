@@ -8,7 +8,6 @@ import online.util.ShitUtil;
 import flixel.FlxBasic;
 import flixel.FlxSubState;
 import backend.ClientPrefs;
-import backend.system.BitmapDiagnostics;
 import objects.Character;
 import objects.Character.CharacterFile;
 import openfl.events.KeyboardEvent;
@@ -202,8 +201,6 @@ class FreeplayState extends MusicBeatState
 
 	override function create()
 	{
-        // Captures memory retained after returning from the previous song.
-        BitmapDiagnostics.snapshot("Freeplay entered");
 		instance = this;
 
 		prevPauseGame = FlxG.autoPause;
@@ -780,9 +777,7 @@ class FreeplayState extends MusicBeatState
 	}
 
 	override function destroy() {
-        BitmapDiagnostics.snapshot("Freeplay before icon cleanup");
 		clearSongIconCache();
-        BitmapDiagnostics.snapshot("Freeplay after icon cleanup");
 		super.destroy();
 
 		FlxG.cameras.remove(itemsCamera);

@@ -394,17 +394,14 @@ class ResultsSoloState extends MusicBeatState {
 		//tween to 4 for 100%lerp
 
         add(new DebugPosHelper());
-		backend.system.BitmapDiagnostics.snapshot("ResultsSoloState ready");
     }
 
 	override function destroy() {
-		backend.system.BitmapDiagnostics.snapshot("ResultsSoloState before destroy");
 		super.destroy();
 		charSprites = [];
 		charSpritesDelay = [];
 		charAnimates = [];
 		charAnimatesDelay = [];
-		backend.system.BitmapDiagnostics.snapshot("ResultsSoloState after destroy");
 	}
 
 	function playMusic() {

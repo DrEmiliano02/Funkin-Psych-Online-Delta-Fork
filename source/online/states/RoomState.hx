@@ -289,13 +289,11 @@ class RoomState extends MusicBeatState /*#if interpret implements interpret.Inte
 	}
 
 	override function destroy() {
-		backend.system.BitmapDiagnostics.snapshot("RoomState before destroy");
 		if (instance == this) instance = null;
 		if (targetCamTween != null) targetCamTween.cancel();
 		if (targetCamScrollTween != null) targetCamScrollTween.cancel();
 		super.destroy();
 		characters.clear(); // No mantener personajes destruidos en este mapa.
-		backend.system.BitmapDiagnostics.snapshot("RoomState after destroy");
 		
 		try {
 			GameClient.clearCallbacks(GameClient.room.state.gameplaySettings);
@@ -310,7 +308,6 @@ class RoomState extends MusicBeatState /*#if interpret implements interpret.Inte
 
 	override function create() {
 		super.create();
-		backend.system.BitmapDiagnostics.snapshot("RoomState entered");
 
 		#if windows
 		if (!Lib.application.window.resizable)

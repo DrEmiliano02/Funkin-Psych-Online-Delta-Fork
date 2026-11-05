@@ -4,7 +4,6 @@ package backend;
 import openfl.utils.Future;
 import flixel.FlxG;
 import backend.system.OptimizedBitmapData;
-import backend.system.BitmapDiagnostics;
 import flixel.system.FlxAssets.FlxGraphicAsset;
 import flxanimate.data.SpriteMapData.FlxSpriteMap;
 import flxanimate.frames.FlxAnimateFrames;
@@ -303,7 +302,6 @@ class Paths
 		{
 			trackLocalAsset(file);
 			OptimizedBitmapData.cacheHits++;
-			BitmapDiagnostics.recordCacheHit();
 			OptimizedBitmapData.prepare(graphic, allowGPU);
 		}
 		return graphic;
@@ -311,7 +309,6 @@ class Paths
 
 	static public function image(key:String, ?library:String = null, ?allowGPU:Bool = true):FlxGraphic
 	{
-		var started:Float = haxe.Timer.stamp();
 		var bitmap:BitmapData = null;
 		var file:String = null;
 
@@ -332,8 +329,6 @@ class Paths
 		}
 
 		if (bitmap != null) {
-			BitmapDiagnostics.recordImageLoad(file, bitmap.width, bitmap.height,
-				(haxe.Timer.stamp() - started) * 1000.0);
 			return bitmapToGraphic(file, bitmap, allowGPU);
 		}
 
@@ -410,7 +405,6 @@ class Paths
 		newGraphic.persist = true;
 		newGraphic.destroyOnNoUse = false;
 		currentTrackedAssets.set(file, newGraphic);
-		BitmapDiagnostics.recordGraphicCreated();
 
 		// No BitmapData replacement: keep existing FlxGraphic/FlxAtlasFrames refs valid.
 		OptimizedBitmapData.prepare(newGraphic, allowGPU);
