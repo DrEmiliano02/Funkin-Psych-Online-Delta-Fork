@@ -53,12 +53,12 @@ class MusicBeatSubstate extends FlxSubState
 
 	private function updateSection():Void
 	{
-		if(stepsToDo < 1) stepsToDo = Math.round(getBeatsOnSection() * 4);
+		if(stepsToDo < 1) stepsToDo = Std.int(Math.max(1, Math.round(getBeatsOnSection() * 4)));
 		while(curStep >= stepsToDo)
 		{
 			curSection++;
 			var beats:Float = getBeatsOnSection();
-			stepsToDo += Math.round(beats * 4);
+			stepsToDo += Std.int(Math.max(1, Math.round(beats * 4)));
 			sectionHit();
 		}
 	}
@@ -93,6 +93,7 @@ class MusicBeatSubstate extends FlxSubState
 	private function updateCurStep():Void
 	{
 		var lastChange = Conductor.getBPMFromSeconds(Conductor.songPosition);
+		if (lastChange == null || lastChange.stepCrochet <= 0) return;
 
 		var shit = ((Conductor.songPosition - ClientPrefs.data.noteOffset) - lastChange.songTime) / lastChange.stepCrochet;
 		curDecStep = lastChange.stepTime + shit;
@@ -118,7 +119,8 @@ class MusicBeatSubstate extends FlxSubState
 	function getBeatsOnSection()
 	{
 		var val:Null<Float> = 4;
-		if(PlayState.SONG != null && PlayState.SONG.notes[curSection] != null) val = PlayState.SONG.notes[curSection].sectionBeats;
-		return val == null ? 4 : val;
+		if(PlayState.SONG != null && PlayState.SONG.notes != null && curSection >= 0 && curSection < PlayState.SONG.notes.length
+			&& PlayState.SONG.notes[curSection] != null) val = PlayState.SONG.notes[curSection].sectionBeats;
+		return val == null || val <= 0 ? 4 : val;
 	}
 }

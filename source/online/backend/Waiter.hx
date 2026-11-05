@@ -9,6 +9,10 @@ class Waiter extends FlxBasic {
     // this clears after the flxstate switches
 	public static var stateQueue:Array<Dynamic> = [];
 	private static var persistQueue(default, never):Array<Dynamic> = [];
+	// Temporized tasks are kept separate so an online retry never sleeps on the game thread.
+	private static var delayedPersistQueue:Array<Dynamic> = [];
+	private static inline var MAX_TASKS_PER_UPDATE:Int = 64;
+	private static var stateQueueGeneration:Int = 0;
 
     var _queueRAW:Dynamic;
     var _queueCall:Void->Void;
@@ -30,7 +34,17 @@ class Waiter extends FlxBasic {
 
 	public static function clearStateQueue() {
 		queueMutex.acquire();
+		stateQueueGeneration++;
 		stateQueue = [];
+		queueMutex.release();
+	}
+
+	/** Schedule work on the main thread, without blocking it with Sys.sleep(). */
+	public static function putDelayedPersist(func:Void->Void, delaySeconds:Float, ?pos:haxe.PosInfos):Void {
+		if (func == null) return;
+		var due:Float = haxe.Timer.stamp() + Math.max(0, delaySeconds);
+		queueMutex.acquire();
+		delayedPersistQueue.push([func, pos, due]);
 		queueMutex.release();
 	}
 
@@ -47,19 +61,37 @@ class Waiter extends FlxBasic {
 
 	public static var waiterReports:String = '';
 
-	function _processQueue(queue:Array<Dynamic>):Void {
-		if (queue.length == 0)
-			return;
-
-		while (true) {
+	function _processQueue(queue:Array<Dynamic>, ?stateBound:Bool = false):Void {
+		// Snapshot: tasks enqueued by callbacks run on a later frame, not recursively.
+		var limit:Int = Std.int(Math.min(MAX_TASKS_PER_UPDATE, queue.length));
+		var generation:Int = stateQueueGeneration;
+		for (i in 0...limit) {
+			if (stateBound && generation != stateQueueGeneration) break;
 			_queueRAW = _shiftQueue(queue);
-
-			if (_queueRAW == null)
-				break;
-				
+			if (_queueRAW == null) break;
 			_tryQueueCall();
 		}
-	}	
+	}
+
+	function _processDelayedQueue():Void {
+		var dueTasks:Array<Dynamic> = [];
+		var now:Float = haxe.Timer.stamp();
+		queueMutex.acquire();
+		var i:Int = 0;
+		while (i < delayedPersistQueue.length && dueTasks.length < MAX_TASKS_PER_UPDATE) {
+			var task = delayedPersistQueue[i];
+			if (task[2] <= now) {
+				dueTasks.push(task);
+				delayedPersistQueue.splice(i, 1);
+			} else i++;
+		}
+		queueMutex.release();
+
+		for (task in dueTasks) {
+			_queueRAW = task;
+			_tryQueueCall();
+		}
+	}
 
 	function _shiftQueue(queue:Array<Dynamic>):Dynamic {
 		queueMutex.acquire();
@@ -80,7 +112,10 @@ class Waiter extends FlxBasic {
 				_queueCall();
 		}
 		catch (exc) {
-			waiterReports += 'Called for ${_queueCallPos.className}.${_queueCallPos.methodName} (${_queueCallPos.fileName} line ${_queueCallPos.lineNumber})\n';
+			if (_queueCallPos != null)
+				waiterReports += 'Called for ${_queueCallPos.className}.${_queueCallPos.methodName} (${_queueCallPos.fileName} line ${_queueCallPos.lineNumber})\n';
+			else
+				waiterReports += 'Exception in an unlocated Waiter callback\n';
 			throw exc;
 		}
 	}
@@ -88,8 +123,9 @@ class Waiter extends FlxBasic {
     override function update(elapsed) {
         super.update(elapsed);
 
-		_processQueue(stateQueue);
+		_processQueue(stateQueue, true);
 		_processQueue(persistQueue);
+		_processDelayedQueue();
 
 		if (waiterReports.length > 0) {
 			waiterReports = '';

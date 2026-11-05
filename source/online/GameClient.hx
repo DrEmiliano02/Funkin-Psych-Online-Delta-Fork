@@ -69,7 +69,7 @@ class GameClient {
 
 			client.create("room", getOptions(true, address), online.backend.schema.Room, (err, room) -> _onJoin(err, room, true, address, onJoin));
 		}, (exc) -> {
-			onJoin(exc);
+			if (onJoin != null) onJoin(exc);
 			LoadingScreen.toggle(false);
 			Log.error(exc);
 			Alert.alert("Failed to connect!", exc.details());
@@ -99,7 +99,7 @@ class GameClient {
 
 			client.joinById(roomID, getOptions(false, roomAddress), online.backend.schema.Room, (err, room) -> _onJoin(err, room, false, roomAddress, onJoin));
 		}, (exc) -> {
-			onJoin(exc);
+			if (onJoin != null) onJoin(exc);
 			LoadingScreen.toggle(false);
 			Log.error(exc);
 			Alert.alert("Failed to connect!", exc.toString());
@@ -110,7 +110,7 @@ class GameClient {
 		if (err != null) {
 			Log.error(err.code + " - " + err.message);
 			Alert.alert("Couldn't connect!", "JOIN ERROR: " + ShitUtil.prettyStatus(err.code) + "\n" + ShitUtil.readableError(err.message));
-			onJoin(err);
+			if (onJoin != null) onJoin(err);
 			leaveRoom();
 			LoadingScreen.toggle(false);
 			if (err.code == 5003)
@@ -128,6 +128,7 @@ class GameClient {
 		reconnecting = false;
 
 		GameClient.room.onError += (code:Int, e:String) -> {
+			if (GameClient.room != room) return; // Ignore stale sessions.
 			Log.error("Room.onError: " + code + " - " + e);
 			if (code == 524)
 				return;
@@ -135,6 +136,7 @@ class GameClient {
 		}
 
 		GameClient.room.onLeave += (code) -> {
+			if (GameClient.room != room) return; // Ignore stale sessions.
 			Log.infoTrace(code);
 			if (room?.roomId != null)
 				Log.info("Left/Kicked from room: " + room.roomId);
@@ -149,27 +151,28 @@ class GameClient {
 			}
 		}
 
+		// Poll for state data without blocking Flixel's main thread for 10 seconds.
 		Waiter.putPersist(() -> {
-			var tries = 50;
-			// great stuff colyseus
-			while (getPlayerSelf() == null) {
-				Log.infoTrace(getPlayerSelf() == null);
-				if (tries-- < 0) {
+			var deadline:Float = haxe.Timer.stamp() + 10.0;
+			var checkState:Void->Void = null;
+			checkState = function() {
+				if (GameClient.room != room) return;
+				if (getPlayerSelf() != null) {
+					// State/schema callbacks may only be ready after the first state message.
+					clearOnMessage();
+					Log.info("Joined the room!");
+					FlxG.autoPause = false;
+					if (onJoin != null) onJoin(null);
+				} else if (haxe.Timer.stamp() >= deadline) {
 					Alert.alert("Couldn't connect!", "Client couldn't receive server's state data!");
-					onJoin(new Error(-1, 'no state data'));
+					if (onJoin != null) onJoin(new Error(-1, 'no state data'));
 					leaveRoom();
 					LoadingScreen.toggle(false);
-					return;
+				} else {
+					Waiter.putDelayedPersist(checkState, 0.2);
 				}
-				Sys.sleep(0.2);
-			}
-
-			Log.info("Joined the room!");
-
-			FlxG.autoPause = false;
-
-			if (onJoin != null)
-				onJoin(null);
+			};
+			checkState();
 		});
 
 		//maybe just make it global
@@ -207,7 +210,7 @@ class GameClient {
 				return;
 			client.reconnect(reconnectToken, online.backend.schema.Room, (err, newRoom:Room<online.backend.schema.Room>) -> {
 				try {
-					if (reconnectToken != room.reconnectionToken) {
+					if (GameClient.room == null || reconnectToken != GameClient.room.reconnectionToken) {
 						reconnecting = false;
 						return;
 					}
@@ -235,7 +238,7 @@ class GameClient {
 				}
 				catch (exc) {
 					Waiter.putPersist(() -> {
-						Alert.alert("Critically failed to reconnect!", "RECONNECT ERROR: " + ShitUtil.prettyStatus(err.code) + " - " + ShitUtil.readableError(err.message));
+						Alert.alert("Critically failed to reconnect!", "RECONNECT ERROR: " + Std.string(exc));
 					});
 					leaveRoom();
 				}
@@ -273,15 +276,16 @@ class GameClient {
 
 	public static function leaveRoom(?reason:String = null) {
 		Waiter.pingServer = null;
+		var wasConnected:Bool = isConnected();
 		reconnecting = false;
 		_pendingMessages = [];
 
-		if (!isConnected())
-			return;
-		
+		if (!wasConnected && GameClient.room == null) return;
+		var leavingRoom = GameClient.room;
 		GameClient.client = null;
-		
+
 		Waiter.putPersist(() -> {
+			if (leavingRoom != GameClient.room) return;
 			if (reason != null)
 				Alert.alert("Disconnected!", reason.trim() != "" ? reason : null);
 			Log.info("Leaving the Room, Reason: " + reason);
@@ -342,26 +346,26 @@ class GameClient {
 
 		GameClient.room.onMessageHandlers.clear();
 
-		for (sid => player in GameClient.room.state.players) {
-			if (player == null)
-				continue;
-
-			clearCallbacks(player);
-			// clearCallbacks(player.arrowColors);
-			// clearCallbacks(player.arrowColorsPixel);
+		if (GameClient.room.state != null && GameClient.room.state.players != null) {
+			for (sid => player in GameClient.room.state.players) {
+				if (player == null) continue;
+				clearCallbacks(player);
+			}
 		}
-		clearCallbacks(GameClient.room.state);
+		if (GameClient.room.state != null) clearCallbacks(GameClient.room.state);
 		// clearCallbacks(GameClient.room.state, "diffList");
 		// clearCallbacks(GameClient.room.state, "gameplaySettings");
 		
 		ChatBox.tryRegisterLogs();
+		var listenerRoom = GameClient.room;
 
 		GameClient.room.onMessage("ping", function(message) {
-			GameClient.send("pong");
+			if (GameClient.room == listenerRoom) GameClient.send("pong");
 		});
 
 		GameClient.room.onMessage("gameStarted", function(message) {
 			Waiter.putPersist(() -> {
+				if (GameClient.room != listenerRoom || listenerRoom.state == null) return;
 				FlxG.mouse.visible = false;
 
 				Mods.currentModDirectory = GameClient.room.state.modDir;
@@ -398,6 +402,7 @@ class GameClient {
 
 		GameClient.room.onMessage("requestSkin", function(?msg:Dynamic) {
 			Waiter.putPersist(() -> {
+				if (GameClient.room != listenerRoom) return;
 				if (ClientPrefs.data.currentSkin != null) {
 					GameClient.send("setSkin", [
 						ClientPrefs.data.currentSkin,
@@ -412,6 +417,7 @@ class GameClient {
 
 		GameClient.room.onMessage("checkChart", function(message) {
 			Waiter.putPersist(() -> {
+				if (GameClient.room != listenerRoom || listenerRoom.state == null) return;
 				try {
 					var hash = Md5.encode(Song.loadRawSong(GameClient.room.state.song, GameClient.room.state.folder));
 					Log.info("verifying song: " + GameClient.room.state.song + " | " + GameClient.room.state.folder + " : " + hash);
@@ -467,8 +473,11 @@ class GameClient {
 	}
 
 	public static function send(type:Dynamic, ?message:Null<Dynamic>) {
-		if (GameClient.isConnected() && type != null)
+		if (GameClient.isConnected() && type != null) {
+			// A reconnect uses the same client; a room switch creates a different client.
+			var originClient = GameClient.client;
 			Waiter.putPersist(() -> {
+				if (GameClient.client != originClient || GameClient.room == null) return;
 				try {
 					room.send(type, message);
 				}
@@ -481,6 +490,7 @@ class GameClient {
 					}
 				}
 			});
+		}
 	}
 
 	static function get_isOwner() {
@@ -490,7 +500,7 @@ class GameClient {
 	}
 
 	public static function hasPerms() {
-		if (!GameClient.isConnected())
+		if (!GameClient.isConnected() || GameClient.room == null || GameClient.room.state == null)
 			return false;
 
 		return GameClient.isOwner || GameClient.room.state.anarchyMode;
@@ -676,7 +686,8 @@ class GameClient {
 	}
 
 	public static function getPlayerSelf() {
-		if (!GameClient.isConnected() || GameClient.room == null)
+		if (!GameClient.isConnected() || GameClient.room == null || GameClient.room.state == null
+			|| GameClient.room.state.players == null)
 			return null;
 
 		return GameClient.room.state.players.get(GameClient.room.sessionId);

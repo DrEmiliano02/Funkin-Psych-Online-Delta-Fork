@@ -94,12 +94,12 @@ class MusicBeatState extends FlxUIState
 
 	private function updateSection():Void
 	{
-		if(stepsToDo < 1) stepsToDo = Math.round(getBeatsOnSection() * 4);
+		if(stepsToDo < 1) stepsToDo = Std.int(Math.max(1, Math.round(getBeatsOnSection() * 4)));
 		while(curStep >= stepsToDo)
 		{
 			curSection++;
 			var beats:Float = getBeatsOnSection();
-			stepsToDo += Math.round(beats * 4);
+			stepsToDo += Std.int(Math.max(1, Math.round(beats * 4)));
 			sectionHit();
 		}
 	}
@@ -134,6 +134,7 @@ class MusicBeatState extends FlxUIState
 	private function updateCurStep():Void
 	{
 		var lastChange = Conductor.getBPMFromSeconds(Conductor.songPosition);
+		if (lastChange == null || lastChange.stepCrochet <= 0) return;
 
 		var shit = ((Conductor.songPosition - ClientPrefs.data.noteOffset) - lastChange.songTime) / lastChange.stepCrochet;
 		curDecStep = lastChange.stepTime + shit;
@@ -143,9 +144,8 @@ class MusicBeatState extends FlxUIState
 	// credit to https://github.com/DetectiveBaldi/FNF-PsychEngine/blob/36e982e2e3e78b9b7939ecfff06f5ffdbcd9cca6/source/backend/MusicBeatState.hx
 	override function startOutro(onOutroComplete:() -> Void):Void {
 		if (!FlxTransitionableState.skipNextTransIn) {
-			FlxG.state.openSubState(new CustomFadeTransition(0.5, false));
-
 			CustomFadeTransition.finishCallback = onOutroComplete;
+			FlxG.state.openSubState(new CustomFadeTransition(0.5, false));
 
 			return;
 		}
@@ -181,11 +181,14 @@ class MusicBeatState extends FlxUIState
 		if(nextState == null)
 			nextState = FlxG.state;
 
-		FlxG.state.openSubState(new CustomFadeTransition(0.5, false));
+		if (FlxG.state == null) return;
+		// Ignore duplicate switch requests while an outgoing fade is active.
+		if (FlxG.state.subState is CustomFadeTransition) return;
 		if(nextState == FlxG.state)
 			CustomFadeTransition.finishCallback = function() FlxG.resetState();
 		else
 			CustomFadeTransition.finishCallback = function() FlxG.switchState(nextState);
+		FlxG.state.openSubState(new CustomFadeTransition(0.5, false));
 	}
 
 	public static function getState():MusicBeatState {
@@ -234,7 +237,8 @@ class MusicBeatState extends FlxUIState
 	function getBeatsOnSection()
 	{
 		var val:Null<Float> = 4;
-		if(PlayState.SONG != null && PlayState.SONG.notes[curSection] != null) val = PlayState.SONG.notes[curSection].sectionBeats;
-		return val == null ? 4 : val;
+		if(PlayState.SONG != null && PlayState.SONG.notes != null && curSection >= 0 && curSection < PlayState.SONG.notes.length
+			&& PlayState.SONG.notes[curSection] != null) val = PlayState.SONG.notes[curSection].sectionBeats;
+		return val == null || val <= 0 ? 4 : val;
 	}
 }

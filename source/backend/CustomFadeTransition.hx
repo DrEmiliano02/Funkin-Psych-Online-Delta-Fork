@@ -5,6 +5,8 @@ import flixel.util.FlxGradient;
 class CustomFadeTransition extends MusicBeatSubstate {
 	public static var finishCallback:Void->Void;
 	private var leTween:FlxTween = null;
+	private var outroFinished:Bool = false;
+	private var disposed:Bool = false;
 	public static var nextCamera:FlxCamera;
 	var isTransIn:Bool = false;
 	var transBlack:FlxSprite;
@@ -34,7 +36,7 @@ class CustomFadeTransition extends MusicBeatSubstate {
 
 		if(isTransIn) {
 			transGradient.y = transBlack.y - transBlack.height;
-			FlxTween.tween(transGradient, {y: transGradient.height + 50}, duration, {
+			leTween = FlxTween.tween(transGradient, {y: transGradient.height + 50}, duration, {
 				onComplete: function(twn:FlxTween) {
 					close();
 				},
@@ -44,9 +46,7 @@ class CustomFadeTransition extends MusicBeatSubstate {
 			transBlack.y = transGradient.y - transBlack.height + 50;
 			leTween = FlxTween.tween(transGradient, {y: transGradient.height + 50}, duration, {
 				onComplete: function(twn:FlxTween) {
-					if(finishCallback != null) {
-						finishCallback();
-					}
+					completeOutro();
 				},
 			ease: FlxEase.linear});
 		}
@@ -72,11 +72,23 @@ class CustomFadeTransition extends MusicBeatSubstate {
 		}
 	}
 
+	private function completeOutro():Void {
+		if (disposed || outroFinished || isTransIn) return;
+		outroFinished = true;
+		var callback = finishCallback;
+		finishCallback = null; // At most one state switch per outgoing transition.
+		if (callback != null) callback();
+	}
+
 	override function destroy() {
-		if(leTween != null) {
-			finishCallback();
+		if (disposed) return;
+		disposed = true;
+		if (leTween != null) {
 			leTween.cancel();
+		leTween = null;
 		}
+		// Do not change state when a transition is cancelled/destroyed.
+		if (!isTransIn && !outroFinished) finishCallback = null;
 		super.destroy();
 	}
 }
