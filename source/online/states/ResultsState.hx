@@ -34,8 +34,7 @@ class ResultsState extends MusicBeatState {
 	var stateAlive:Bool = true;
 	var ownedTimers:Array<FlxTimer> = [];
 	var ownedTweens:Array<FlxTween> = [];
-	var spotlightFlicker:FlxFlicker;
-	var rewardFlicker:FlxFlicker;
+	// FlxFlicker instances are pooled: use the sprites to check an active flicker.
 	var resultIntroMusic:FlxSound;
 
 	function schedule(delay:Float, callback:Void->Void):FlxTimer {
@@ -591,7 +590,7 @@ class ResultsState extends MusicBeatState {
 				gainedText.text = '+ ${gainedPoints}FP';
 				FlxG.sound.play(Paths.sound('fap'));
 				if (ClientPrefs.data.flashing)
-					rewardFlicker = FlxFlicker.flicker(gainedText, 0.4, 0.05, true);
+					FlxFlicker.flicker(gainedText, 0.4, 0.05, true);
 				trackedTween(gainedText, {alpha: 0.2}, 2, {ease: FlxEase.quadInOut});
 
 				schedule(2, () -> {
@@ -617,8 +616,11 @@ class ResultsState extends MusicBeatState {
 		ownedTimers = [];
 		for (tween in ownedTweens) if (tween != null) tween.cancel();
 		ownedTweens = [];
-		if (spotlightFlicker != null) spotlightFlicker.stop();
-		if (rewardFlicker != null) rewardFlicker.stop();
+		// Stop only currently active flickers. Completed instances may already be pooled.
+		if (spotlight != null && FlxFlicker.isFlickering(spotlight))
+			FlxFlicker.stopFlickering(spotlight);
+		if (gainedText != null && FlxFlicker.isFlickering(gainedText))
+			FlxFlicker.stopFlickering(gainedText);
 		if (resultIntroMusic != null) resultIntroMusic.onComplete = null;
 		resultIntroMusic = null;
 		super.destroy();
@@ -650,7 +652,7 @@ class ResultsState extends MusicBeatState {
 
 	function flickerLoop() {
 		if (!stateAlive || spotlight == null) return;
-		spotlightFlicker = FlxFlicker.flicker(spotlight, 0.2, 0.05, true);
+		FlxFlicker.flicker(spotlight, 0.2, 0.05, true);
 		schedule(FlxG.random.int(3, 12), () -> {
 			if (!destroyed) {
 				flickerLoop();
