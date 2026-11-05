@@ -592,7 +592,7 @@ class Seg7Numbers extends FlxSpriteGroup {
 	public function playAnimAllDelay(anim:String, ?delay:Float = 0.05) {
 		for (i in 0...members.length) {
 			animationTimers.push(FlxTimer.wait(delay * i, () -> {
-				if (!destroyed && members != null && i < members.length && members[i] != null)
+				if (members != null && i >= 0 && i < members.length && members[i] != null)
 					playAnim(i, anim);
 			}));
 		}
