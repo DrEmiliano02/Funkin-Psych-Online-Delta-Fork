@@ -394,7 +394,18 @@ class ResultsSoloState extends MusicBeatState {
 		//tween to 4 for 100%lerp
 
         add(new DebugPosHelper());
+		backend.system.BitmapDiagnostics.snapshot("ResultsSoloState ready");
     }
+
+	override function destroy() {
+		backend.system.BitmapDiagnostics.snapshot("ResultsSoloState before destroy");
+		super.destroy();
+		charSprites = [];
+		charSpritesDelay = [];
+		charAnimates = [];
+		charAnimatesDelay = [];
+		backend.system.BitmapDiagnostics.snapshot("ResultsSoloState after destroy");
+	}
 
 	function playMusic() {
 		if (musicIntro != null) {
@@ -491,9 +502,10 @@ class Seg7Numbers extends FlxSpriteGroup {
 			numbers.unshift('_');
 
 		var lastX:Float = 0;
+		var digitFrames = Paths.getSparrowAtlas('resultScreen/score-digital-numbers');
 		for (number in numbers) {
 			var num = new FlxSprite(lastX);
-			num.frames = Paths.getSparrowAtlas('resultScreen/score-digital-numbers');
+			num.frames = digitFrames;
 			num.animation.addByPrefix('idle', 'DISABLED');
 			num.animation.addByPrefix('gone', 'GONE');
 			//fuck you dave

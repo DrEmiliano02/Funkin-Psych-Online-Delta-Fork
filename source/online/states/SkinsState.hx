@@ -464,6 +464,7 @@ class SkinsState extends MusicBeatState {
 		CustomFadeTransition.nextCamera = hud; // wat
 
 		GameClient.send("status", "Selecting their skin");
+		backend.system.BitmapDiagnostics.snapshot("SkinsState ready");
     }
 
 	function getCharacterName(i:Int) {
@@ -820,7 +821,13 @@ class SkinsState extends MusicBeatState {
 	}
 
 	override function destroy() {
+		backend.system.BitmapDiagnostics.snapshot("SkinsState before destroy");
+		if (selectTimer != null) {
+			selectTimer.cancel();
+			selectTimer = null;
+		}
 		super.destroy();
+		backend.system.BitmapDiagnostics.snapshot("SkinsState after destroy");
 
 		if (skipStaticDestroy)
 			return;
@@ -889,6 +896,9 @@ class SkinsState extends MusicBeatState {
 			// }
 
 			selectTimer = new FlxTimer().start(0.8, t -> {
+				// No cargar una skin despues de salir, ni desde un timer obsoleto.
+				if (destroyed || isExiting || t != selectTimer)
+					return;
 				if (character.members[0] != null) {
 					character.members[0].destroy();
 				}
@@ -904,8 +914,9 @@ class SkinsState extends MusicBeatState {
 				try {
 					var daCharacter = new Character(0, 0, getCharacterName(curCharacter), flipped);
 					daCharacter.scrollFactor.set(1.2, 1.2);
-					if (daCharacter?.graphic?.bitmap != null)
-						daCharacter.graphic.bitmap.disposeImage();
+					// NO llamar disposeImage() sobre BitmapData de un FlxGraphic compartido.
+					// La cache GPU de Paths administra la textura; conservar la copia CPU
+					// evita invalidar otras skins, iconos o animaciones.
 					if (daCharacter.animExists('spawn')) {
 						daCharacter.playAnim('spawn');
 					}

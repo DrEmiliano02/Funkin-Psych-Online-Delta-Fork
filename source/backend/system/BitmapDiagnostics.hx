@@ -3,6 +3,7 @@ package backend.system;
 import backend.Paths;
 import openfl.system.System;
 
+@:access(flixel.graphics.FlxGraphic)
 class BitmapDiagnostics
 {
     // Turn off after a profiling session if you do not want report I/O.
@@ -75,7 +76,9 @@ class BitmapDiagnostics
         if (!enabled) return;
         #if (cpp && !mobile)
         noteMemory();
-        var entries:Array<{key:String, mib:Float, width:Int, height:Int}> = [];
+        var entries:Array<{key:String, mib:Float, width:Int, height:Int, refs:Int}> = [];
+        var zeroUse:Int = 0;
+        var activeUse:Int = 0;
         var totalEstimatedMiB:Float = 0;
         for (key in Paths.currentTrackedAssets.keys())
         {
@@ -83,7 +86,9 @@ class BitmapDiagnostics
             if (graphic == null || graphic.bitmap == null) continue;
             var bitmap = graphic.bitmap;
             var mib:Float = 4.0 * bitmap.width * bitmap.height / (1024.0 * 1024.0);
-            entries.push({key: key, mib: mib, width: bitmap.width, height: bitmap.height});
+            var refs:Int = graphic.useCount;
+            if (refs <= 0) zeroUse++; else activeUse++;
+            entries.push({key: key, mib: mib, width: bitmap.width, height: bitmap.height, refs: refs});
             totalEstimatedMiB += mib;
         }
         entries.sort(function(a, b):Int {
@@ -91,12 +96,14 @@ class BitmapDiagnostics
         });
 
         var out = new StringBuf();
-        out.add("\n=== Bitmap v3.2.3 | " + Date.now().toString() + " | " + songLabel
+        out.add("\n=== Bitmap v3.2.6 | " + Date.now().toString() + " | " + songLabel
             + " | " + phase + " ===\n");
         out.add("Runtime reported RAM: " + rounded(System.totalMemory / (1024.0 * 1024.0)) + " MiB");
         out.add(" | peak sampled: " + rounded(peakRuntimeBytes / (1024.0 * 1024.0)) + " MiB\n");
         out.add("Tracked FlxGraphics: " + entries.length + " | sum of dimensions x4: "
             + rounded(totalEstimatedMiB) + " MiB (estimate, NOT measured allocation)\n");
+        out.add("Tracked graphics with useCount > 0: " + activeUse
+            + " | useCount <= 0: " + zeroUse + " (not a proof of safe disposal)\n");
         out.add("Images requested via Paths.image: " + imageLoads + " | cached reuses: "
             + imageCacheHits + " | graphics created (incl. async): " + graphicsCreated + "\n");
         out.add("GPU: " + OptimizedBitmapData.diagnostics() + "\n");
@@ -104,7 +111,15 @@ class BitmapDiagnostics
         for (i in 0...Std.int(Math.min(15, entries.length)))
         {
             var e = entries[i];
-            out.add("  " + rounded(e.mib) + " MiB | " + e.width + "x" + e.height + " | " + e.key + "\n");
+            out.add("  " + rounded(e.mib) + " MiB | " + e.width + "x" + e.height + " | useCount=" + e.refs + " | " + e.key + "\n");
+        }
+        out.add("Top large, zero-use tracked graphics (candidates for later cleanup):\n");
+        var zeroPrinted:Int = 0;
+        for (e in entries)
+        {
+            if (e.refs > 0) continue;
+            out.add("  " + rounded(e.mib) + " MiB | useCount=" + e.refs + " | " + e.key + "\n");
+            if (++zeroPrinted >= 10) break;
         }
         out.add("Top " + slowestLoads.length + " Paths.image retrieval/decode times (includes file/cache lookup):\n");
         for (e in slowestLoads)

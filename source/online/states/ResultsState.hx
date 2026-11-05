@@ -128,9 +128,11 @@ class ResultsState extends MusicBeatState {
 		charactersLayer.cameras = [cam];
 		add(charactersLayer);
 
+		// Todos los jueces usan el mismo atlas, sin pedirlo tres veces.
+		var judgeFrames = Paths.getSparrowAtlas('onlineJudges');
 		win = new FlxSprite();
 		win.antialiasing = ClientPrefs.data.antialiasing;
-		win.frames = Paths.getSparrowAtlas('onlineJudges');
+		win.frames = judgeFrames;
 		win.animation.addByPrefix('idle', "weiner", 24);
 		win.animation.play('idle');
 		win.scale.set(0.65, 0.65);
@@ -142,7 +144,7 @@ class ResultsState extends MusicBeatState {
 
 		lose = new FlxSprite();
 		lose.antialiasing = ClientPrefs.data.antialiasing;
-		lose.frames = Paths.getSparrowAtlas('onlineJudges');
+		lose.frames = judgeFrames;
 		lose.animation.addByPrefix('idle', "loser", 24);
 		lose.animation.play('idle');
 		lose.scale.set(0.6, 0.6);
@@ -154,7 +156,7 @@ class ResultsState extends MusicBeatState {
 
 		tie = new FlxSprite();
 		tie.antialiasing = ClientPrefs.data.antialiasing;
-		tie.frames = Paths.getSparrowAtlas('onlineJudges');
+		tie.frames = judgeFrames;
 		tie.animation.addByPrefix('idle', "tie", 24);
 		tie.animation.play('idle');
 		tie.scale.set(0.6, 0.6);
@@ -581,7 +583,15 @@ class ResultsState extends MusicBeatState {
 		var debugPoser = new online.objects.DebugPosHelper();
 		debugPoser.cameras = [camHUD];
 		add(debugPoser);
+		backend.system.BitmapDiagnostics.snapshot("ResultsState ready");
     }
+
+	override function destroy() {
+		backend.system.BitmapDiagnostics.snapshot("ResultsState before destroy");
+		super.destroy();
+		characters.clear(); // Soltar referencias a LobbyCharacter ya destruidos.
+		backend.system.BitmapDiagnostics.snapshot("ResultsState after destroy");
+	}
 
 	function registerMessages() {
 		GameClient.initStateListeners(this, this.registerMessages);
