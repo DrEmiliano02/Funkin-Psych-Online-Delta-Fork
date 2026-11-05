@@ -504,16 +504,22 @@ class PlayState extends MusicBeatState
 		return true;
 	}
 
-	var freakyFlicker:FlxFlicker;
 	var readyTween:FlxTween;
+
+	// FlxFlicker instances are pooled; never retain one and call stop() after it may have finished.
+	// The sprite-based lookup only stops a flicker still registered for this State's sprite.
+	function stopReadyFlicker():Void
+	{
+		if (waitReadySpr != null && FlxFlicker.isFlickering(waitReadySpr))
+			FlxFlicker.stopFlickering(waitReadySpr);
+	}
 	var waitReady(default, set) = false;
 	var isReady = false;
 	var canStart = true;
 	function set_waitReady(v) {
 		if (readyTween != null)
 			readyTween.cancel();
-		if (freakyFlicker?.timer != null)
-			freakyFlicker.stop();
+		stopReadyFlicker();
 
 		if (waitReadySpr != null)
 			readyTween = FlxTween.tween(waitReadySpr, {alpha: v ? 1 : 0}, 0.5, {ease: FlxEase.quadIn});
@@ -3519,8 +3525,11 @@ class PlayState extends MusicBeatState
 			if (!isReady && controls.ACCEPT && !inCutscene && canStart && canInput) {
 				isReady = true;
 				FlxG.sound.play(Paths.sound('confirmMenu'), 0.5);
-				if (ClientPrefs.data.flashing)
-					freakyFlicker = FlxFlicker.flicker(waitReadySpr, 0.5, 0.05, true, false, _ -> waitReadySpr.text = "waiting for other player...");
+				if (ClientPrefs.data.flashing && waitReadySpr != null)
+					FlxFlicker.flicker(waitReadySpr, 0.5, 0.05, true, false, _ -> {
+						if (!playStateDisposing && waitReadySpr != null)
+							waitReadySpr.text = "waiting for other player...";
+					});
 				GameClient.send("playerReady");
 			}
 
@@ -5968,7 +5977,7 @@ class PlayState extends MusicBeatState
 		if (gameOverTimer != null) gameOverTimer.cancel();
 		if (loadingCameraFade != null) loadingCameraFade.cancel();
 		if (readyTween != null) readyTween.cancel();
-		if (freakyFlicker != null) freakyFlicker.stop();
+		stopReadyFlicker();
 		if (songSpeedTween != null) songSpeedTween.cancel();
 		if (cameraTwn != null) cameraTwn.cancel();
 		if (cameraTwnPos != null) cameraTwnPos.cancel();
